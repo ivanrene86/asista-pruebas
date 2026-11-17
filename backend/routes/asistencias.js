@@ -1,0 +1,47 @@
+import { Router } from 'express'
+import * as asistenciaController from '../controllers/asistenciaController.js'
+import { validarCamposRequeridos, validarFecha } from '../middlewares/validator.js'
+import { autenticarJWT, verificarRol } from '../middlewares/auth.js'
+import { dispositivoLimiter } from '../middlewares/rateLimiter.js'
+
+const router = Router()
+
+// Consulta de Asistencias (permitido para Kiosco de Aula y paneles autenticados)
+router.get('/', autenticarJWT, validarFecha('fecha'), asistenciaController.getAsistencias)
+// Registro manual de asistencia (restringido a Administrador o Instructor autenticado)
+router.post('/',
+  autenticarJWT,
+  verificarRol(['Administrador', 'Instructor']),
+  validarCamposRequeridos(['estudianteId', 'fichaId', 'fecha', 'estado']),
+  validarFecha('fecha'),
+  asistenciaController.createAsistencia
+)
+
+// Control de Jornadas (requiere Administrador o Instructor)
+router.post('/inhabilitar-jornada',
+  autenticarJWT,
+  verificarRol(['Administrador', 'Instructor']),
+  validarCamposRequeridos(['fichaId', 'fecha']),
+  validarFecha('fecha'),
+  asistenciaController.inhabilitarJornada
+)
+
+router.post('/reactivar-jornada',
+  autenticarJWT,
+  verificarRol(['Administrador', 'Instructor']),
+  validarCamposRequeridos(['fichaId', 'fecha']),
+  validarFecha('fecha'),
+  asistenciaController.reactivarJornada
+)
+
+// Sincronización idempotente de asistencias pendientes del huellero local.
+// Autenticación por deviceId + token (dentro del controller, no con JWT de usuario).
+router.post('/sync', dispositivoLimiter, asistenciaController.syncAsistencias)
+
+// Gestión de base de datos SQLite offline
+router.get('/sqlite/download', autenticarJWT, verificarRol(['Administrador']), asistenciaController.downloadSqlite)
+router.get('/sqlite/docente/:identificador', autenticarJWT, verificarRol(['Administrador', 'Instructor']), asistenciaController.downloadSqliteDocente)
+router.post('/sqlite/sync-all', autenticarJWT, verificarRol(['Administrador']), asistenciaController.syncAllSqlite)
+router.post('/sqlite/sync-docentes', autenticarJWT, verificarRol(['Administrador']), asistenciaController.ejecutarSincronizacionDocentes)
+
+export default router

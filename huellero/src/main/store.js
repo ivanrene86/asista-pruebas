@@ -1,0 +1,203 @@
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'fs'
+import { resolve } from 'path'
+import { app } from 'electron'
+
+function getDataDir() {
+  try {
+    if (app && app.isPackaged) {
+      const dir = resolve(app.getPath('userData'), 'data')
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      return dir
+    }
+  } catch (_) {}
+  const localDir = resolve(process.cwd(), 'data')
+  if (!existsSync(localDir)) {
+    try {
+      mkdirSync(localDir, { recursive: true })
+      return localDir
+    } catch (_) {
+      if (app) {
+        const dir = resolve(app.getPath('userData'), 'data')
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+        return dir
+      }
+    }
+  }
+  return localDir
+}
+
+const DATA_DIR = getDataDir()
+
+const PLANTILLAS_PATH = resolve(DATA_DIR, 'plantillas.json')
+const PENDIENTES_PATH = resolve(DATA_DIR, 'pendientes.json')
+const ESTADO_PATH = resolve(DATA_DIR, 'estado.json')
+const ASISTENCIAS_DIA_PATH = resolve(DATA_DIR, 'asistencias-dia.json')
+
+let estado = { claseActiva: null }
+let plantillas = {}
+let pendientes = []
+let asistenciasDia = {}
+
+// Callback opcional para notificar cambios en la cola de pendientes (alta o baja).
+// Lo usa engine.js para reemitir el estado a la interfaz sin acoplar store con engine.
+let onPendientesChange = null
+
+export function setOnPendientesChange(cb) {
+  onPendientesChange = typeof cb === 'function' ? cb : null
+}
+
+function notificarPendientesChange() {
+  if (onPendientesChange) {
+    try {
+      onPendientesChange()
+    } catch (_) {}
+  }
+}
+
+function asegurarDirectorio() {
+  if (!existsSync(DATA_DIR)) {
+    mkdirSync(DATA_DIR, { recursive: true })
+  }
+}
+
+function leerJSON(ruta, porDefecto) {
+  if (!existsSync(ruta)) return porDefecto
+  try {
+    return JSON.parse(readFileSync(ruta, 'utf8'))
+  } catch {
+    return porDefecto
+  }
+}
+
+function escribirJSON(ruta, valor) {
+  const tmp = `${ruta}.tmp`
+  writeFileSync(tmp, JSON.stringify(valor, null, 2), 'utf8')
+
+  try {
+    renameSync(tmp, ruta)
+  } catch {
+    // Si Windows o el antivirus bloquean temporalmente el renombrado atómico (EBUSY/EPERM),
+    // escribir directamente en el destino sin bloquear el hilo principal con bucles de espera.
+    try {
+      if (existsSync(tmp)) unlinkSync(tmp)
+    } catch (_) {}
+    writeFileSync(ruta, JSON.stringify(valor, null, 2), 'utf8')
+  }
+}
+
+function fechaColombia(timestamp) {
+  const d = timestamp != null ? new Date(timestamp) : new Date()
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(d)
+}
+
+function purgarAsistenciasDia(fecha) {
+  const limpio = {}
+  for (const f of Object.keys(asistenciasDia)) {
+    if (f === fecha) limpio[f] = asistenciasDia[f]
+  }
+  asistenciasDia = limpio
+}
+
+function persistirEstado() {
+  escribirJSON(ESTADO_PATH, estado)
+}
+
+function persistirPendientes() {
+  escribirJSON(PENDIENTES_PATH, pendientes)
+}
+
+function persistirPlantillas() {
+  escribirJSON(PLANTILLAS_PATH, plantillas)
+}
+
+export async function init() {
+  asegurarDirectorio()
+
+  if (!existsSync(ESTADO_PATH)) {
+    escribirJSON(ESTADO_PATH, { claseActiva: null })
+  }
+  if (!existsSync(PLANTILLAS_PATH)) {
+    escribirJSON(PLANTILLAS_PATH, {})
+  }
+  if (!existsSync(PENDIENTES_PATH)) {
+    escribirJSON(PENDIENTES_PATH, [])
+  }
+
+  estado = leerJSON(ESTADO_PATH, { claseActiva: null }) || { claseActiva: null }
+  plantillas = leerJSON(PLANTILLAS_PATH, {}) || {}
+  pendientes = leerJSON(PENDIENTES_PATH, [])
+
+  asistenciasDia = leerJSON(ASISTENCIAS_DIA_PATH, {}) || {}
+
+  if (!Array.isArray(pendientes)) pendientes = []
+  if (typeof plantillas !== 'object' || plantillas === null) plantillas = {}
+  if (typeof estado !== 'object' || estado === null) estado = { claseActiva: null }
+  if (typeof asistenciasDia !== 'object' || asistenciasDia === null || Array.isArray(asistenciasDia)) asistenciasDia = {}
+  purgarAsistenciasDia(fechaColombia(Date.now()))
+}
+
+export function getClaseActiva() {
+  return estado.claseActiva || null
+}
+
+export function setClaseActiva(clase) {
+  estado.claseActiva = clase || null
+  persistirEstado()
+}
+
+export async function getPlantillasFicha(fichaId) {
+  const clave = String(fichaId)
+  const lista = plantillas[clave]
+  return Array.isArray(lista) ? lista : []
+}
+
+export function guardarPlantillasFicha(fichaId, lista) {
+  const clave = String(fichaId)
+  plantillas[clave] = Array.isArray(lista) ? lista : []
+  persistirPlantillas()
+}
+
+export function guardarPendiente(asistencia) {
+  if (!asistencia) return
+  pendientes.push(asistencia)
+  persistirPendientes()
+  notificarPendientesChange()
+}
+
+export function getPendientes() {
+  return pendientes
+}
+
+export function marcarSincronizadas(uuids) {
+  if (!Array.isArray(uuids) || uuids.length === 0) return
+  const conjunto = new Set(uuids.map((u) => String(u)))
+  pendientes = pendientes.filter((p) => !conjunto.has(String(p.uuid)))
+  persistirPendientes()
+  notificarPendientesChange()
+}
+
+export function yaTieneAsistenciaHoy(fichaId, estudianteId, timestamp) {
+  const fecha = fechaColombia(timestamp)
+  const porFecha = asistenciasDia[fecha]
+  if (!porFecha || typeof porFecha !== 'object') return false
+  const ids = porFecha[String(fichaId)]
+  return Array.isArray(ids) && ids.includes(String(estudianteId))
+}
+
+export function marcarAsistenciaHoy(fichaId, estudianteId, timestamp) {
+  const fecha = fechaColombia(timestamp)
+  purgarAsistenciasDia(fecha)
+
+  const claveFicha = String(fichaId)
+  if (!asistenciasDia[fecha] || typeof asistenciasDia[fecha] !== 'object') {
+    asistenciasDia[fecha] = {}
+  }
+  const porFecha = asistenciasDia[fecha]
+  if (!Array.isArray(porFecha[claveFicha])) porFecha[claveFicha] = []
+
+  const ids = porFecha[claveFicha]
+  const claveEst = String(estudianteId)
+  if (!ids.includes(claveEst)) ids.push(claveEst)
+
+  escribirJSON(ASISTENCIAS_DIA_PATH, asistenciasDia)
+}

@@ -1,0 +1,109 @@
+import './init-data.js'
+import { app, BrowserWindow, ipcMain } from 'electron'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
+import * as engine from './engine.js'
+import { iniciarScheduler } from './scheduler.js'
+
+// Desactivar aceleración gráfica por hardware para evitar cuelgues del proceso GPU
+// en equipos con tarjetas integradas (Intel HD Graphics) o drivers genéricos.
+app.disableHardwareAcceleration()
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+const iconPath = app.isPackaged
+  ? join(process.resourcesPath, 'icon.ico')
+  : join(__dirname, '../../build/icon.ico')
+
+let mainWindow = null
+
+function broadcastStatus() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('huellero:status', engine.getStatus())
+  }
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1024,
+    height: 768,
+    title: 'Asista',
+    icon: iconPath,
+    fullscreen: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#0f172a',
+    show: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.mjs'),
+      contextIsolation: true,
+      sandbox: false,
+      nodeIntegration: false,
+    },
+  })
+
+  mainWindow.setMenuBarVisibility(false)
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show()
+  })
+
+  const fallbackTimer = setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show()
+    }
+  }, 5000)
+
+  mainWindow.once('show', () => {
+    clearTimeout(fallbackTimer)
+  })
+
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+}
+
+ipcMain.handle('huellero:getStatus', () => engine.getStatus())
+ipcMain.handle('huellero:capture', () => engine.capturarYVerificar())
+ipcMain.handle('huellero:login', (_e, correo, password) => engine.loginDocente(correo, password))
+ipcMain.handle('huellero:logout', () => engine.logoutDocente())
+ipcMain.handle('huellero:getFichasLider', () => engine.getFichasLider())
+ipcMain.handle('huellero:getEstudiantesFicha', (_e, fichaId) => engine.getEstudiantesFicha(fichaId))
+ipcMain.handle('huellero:consultarConsentimientoDatos', (_e, estudianteId) => engine.consultarConsentimientoDatos(estudianteId))
+ipcMain.handle('huellero:registrarConsentimientoDatos', (_e, payload) => engine.registrarConsentimientoDatos(payload))
+ipcMain.handle('huellero:enrolar', (_e, payload) => engine.enrolarEstudiante(payload))
+ipcMain.handle('huellero:cancelarEnrolar', () => engine.cancelarEnrolamiento())
+ipcMain.handle('huellero:cancelarCaptura', () => engine.cancelarCapturaEnCurso())
+
+engine.setOnEstadoChange(broadcastStatus)
+engine.setOnEnrolarProgreso((progreso) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('huellero:enrolar-progreso', progreso)
+  }
+})
+
+app.whenReady().then(async () => {
+  createWindow()
+  broadcastStatus()
+  await engine.init()
+  iniciarScheduler()
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  engine.detenerMonitorLector()
+})
+
+export { broadcastStatus }

@@ -1,0 +1,866 @@
+<script setup>
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import api from '../services/index.js'
+import '../styles/fichas.css'
+import { useAuth } from '../composables/useAuth.js'
+import { confirmar } from '../composables/useConfirm.js'
+import { nombreProgramaLimpio, capitalizarTexto, normalizarJornada, normalizarNumeroDocumento, normalizarNombrePrograma } from '../utils/textos.js'
+
+const { usuario } = useAuth()
+const esAdmin = computed(() => {
+  const rol = usuario.value?.rol || (JSON.parse(sessionStorage.getItem('user_data') || localStorage.getItem('usuario') || '{}')).rol || 'Administrador'
+  return rol === 'Administrador'
+})
+
+const toast = ref({ show: false, message: '', type: '' })
+const showModal = ref(false)
+const editingId = ref(null)
+const loading = ref(false)
+
+const busquedaDocente = ref('')
+
+const expandidos = ref({})
+const showInhabilitarModal = ref(false)
+const inhabilitarTarget = ref(null)
+const inhabilitarMotivo = ref('')
+
+// Estados para Catálogo de Programas
+const programasList = ref([])
+const busquedaPrograma = ref('')
+const showModalProgramas = ref(false)
+const showModalEditarPrograma = ref(false)
+const loadingPrograma = ref(false)
+const vieneDeFichaForm = ref(false)
+
+const programaForm = reactive({
+  id: null,
+  nombre: '',
+  sigla: '',
+  codigo: '',
+  nivel: 'Tecnólogo',
+  aliasStr: '',
+  descripcion: '',
+  estado: 'Activo'
+})
+
+const fichaForm = reactive({
+  codigoFicha: '',
+  nombrePrograma: '',
+  jornada: 'Mañana',
+  aulaAsignada: '',
+  instructorLiderId: null,
+  instructores: [], // Instructores Comunes
+  fechaInicio: '',
+  fechaFin: '',
+})
+
+const fichas = ref([])
+const instructoresList = ref([])
+
+onMounted(async () => {
+  await Promise.all([loadFichas(), loadInstructores(), loadProgramas()])
+})
+
+async function loadFichas() {
+  try {
+    fichas.value = await api.fichas.getAll()
+  } catch (e) {
+    showToastFn('Error al cargar fichas', 'error')
+  }
+}
+
+async function loadInstructores() {
+  try {
+    instructoresList.value = await api.instructores.getAll()
+  } catch (e) {}
+}
+
+async function loadProgramas() {
+  try {
+    programasList.value = await api.programas.getAll()
+  } catch (e) {
+    console.error('Error al cargar programas:', e)
+  }
+}
+
+const programasActivos = computed(() => {
+  return (programasList.value || []).filter(p => p.estado !== 'Inactivo')
+})
+
+const programasFiltrados = computed(() => {
+  const q = busquedaPrograma.value.toLowerCase().trim()
+  if (!q) return programasList.value || []
+  return (programasList.value || []).filter(p =>
+    (p.nombre || '').toLowerCase().includes(q) ||
+    (p.sigla || '').toLowerCase().includes(q) ||
+    (p.codigo || '').toLowerCase().includes(q) ||
+    (p.nivel || '').toLowerCase().includes(q)
+  )
+})
+
+const instructoresFiltrados = computed(() => {
+  const query = busquedaDocente.value.toLowerCase().trim()
+  const activos = instructoresList.value.filter(i => i.estado !== 'Inactivo')
+  if (!query) return activos
+  return activos.filter(i => 
+    `${i.nombres} ${i.apellidos} ${i.numeroDocumento || ''} ${i.especialidad || ''} ${i.correo || ''}`.toLowerCase().includes(query)
+  )
+})
+
+function showToastFn(message, type = 'success') {
+  toast.value = { show: true, message, type }
+  setTimeout(() => { toast.value.show = false }, 3000)
+}
+
+function openCreate() {
+  editingId.value = null
+  busquedaDocente.value = ''
+  Object.assign(fichaForm, {
+    codigoFicha: '',
+    nombrePrograma: '',
+    jornada: 'Diurna',
+    aulaAsignada: '',
+    instructorLiderId: null,
+    instructores: [],
+    fechaInicio: '',
+    fechaFin: '',
+  })
+  showModal.value = true
+}
+
+function openEdit(ficha) {
+  editingId.value = ficha._id
+  busquedaDocente.value = ''
+  const comunesIds = Array.isArray(ficha.instructores)
+    ? ficha.instructores.map(i => i._id || i)
+    : []
+
+  Object.assign(fichaForm, {
+    codigoFicha: ficha.codigoFicha,
+    nombrePrograma: ficha.nombrePrograma,
+    jornada: ficha.jornada,
+    aulaAsignada: ficha.aulaAsignada,
+    instructorLiderId: ficha.instructorLiderId?._id || ficha.instructorLiderId || null,
+    instructores: comunesIds,
+    fechaInicio: ficha.fechaInicio,
+    fechaFin: ficha.fechaFin,
+  })
+  showModal.value = true
+}
+
+function toggleInstructorComun(id) {
+  const index = fichaForm.instructores.indexOf(id)
+  if (index > -1) {
+    fichaForm.instructores.splice(index, 1)
+  } else {
+    fichaForm.instructores.push(id)
+  }
+}
+
+function closeModal() {
+  showModal.value = false
+}
+
+async function guardarFicha() {
+  const { codigoFicha, nombrePrograma, jornada, aulaAsignada, instructorLiderId, instructores, fechaInicio, fechaFin } = fichaForm
+  if (!codigoFicha || !nombrePrograma || !jornada || !aulaAsignada || !instructorLiderId || !fechaInicio || !fechaFin) {
+    showToastFn('Completa todos los campos obligatorios', 'error')
+    return
+  }
+  loading.value = true
+  try {
+    const comunesFiltrados = instructores.filter(id => id !== instructorLiderId)
+    const body = {
+      codigoFicha: normalizarNumeroDocumento(codigoFicha),
+      nombrePrograma: normalizarNombrePrograma(nombrePrograma, programasList.value),
+      jornada: normalizarJornada(jornada),
+      aulaAsignada: capitalizarTexto(aulaAsignada),
+      instructorLiderId,
+      instructores: comunesFiltrados,
+      fechaInicio,
+      fechaFin
+    }
+    if (editingId.value) {
+      await api.fichas.update(editingId.value, body)
+      showToastFn('Ficha actualizada correctamente')
+    } else {
+      await api.fichas.create(body)
+      showToastFn('Ficha creada correctamente')
+    }
+    await loadFichas()
+    await loadProgramas()
+    closeModal()
+  } catch (e) {
+    showToastFn('Error: ' + e.message, 'error')
+  } finally {
+    loading.value = false
+  }
+}
+
+function onProgramaBlur() {
+  if (fichaForm.nombrePrograma) {
+    fichaForm.nombrePrograma = normalizarNombrePrograma(fichaForm.nombrePrograma, programasList.value)
+  }
+}
+
+function abrirGestionProgramas() {
+  if (!esAdmin.value) {
+    showToastFn('Solo el Administrador puede gestionar o adjuntar programas', 'warning')
+    return
+  }
+  busquedaPrograma.value = ''
+  showModalProgramas.value = true
+}
+
+function abrirCrearPrograma() {
+  if (!esAdmin.value) {
+    showToastFn('Solo el Administrador puede crear programas', 'warning')
+    return
+  }
+  vieneDeFichaForm.value = false
+  Object.assign(programaForm, {
+    id: null,
+    nombre: '',
+    sigla: '',
+    codigo: '',
+    nivel: 'Tecnólogo',
+    aliasStr: '',
+    descripcion: '',
+    estado: 'Activo'
+  })
+  showModalEditarPrograma.value = true
+}
+
+function abrirCrearProgramaRapido() {
+  if (!esAdmin.value) {
+    showToastFn('Solo el Administrador puede adjuntar programas', 'warning')
+    return
+  }
+  vieneDeFichaForm.value = true
+  Object.assign(programaForm, {
+    id: null,
+    nombre: fichaForm.nombrePrograma ? normalizarNombrePrograma(fichaForm.nombrePrograma, programasList.value) : '',
+    sigla: '',
+    codigo: '',
+    nivel: 'Tecnólogo',
+    aliasStr: '',
+    descripcion: '',
+    estado: 'Activo'
+  })
+  showModalEditarPrograma.value = true
+}
+
+function abrirEditarPrograma(prog) {
+  if (!esAdmin.value) {
+    showToastFn('Solo el Administrador puede modificar programas', 'warning')
+    return
+  }
+  vieneDeFichaForm.value = false
+  Object.assign(programaForm, {
+    id: prog._id,
+    nombre: prog.nombre,
+    sigla: prog.sigla || '',
+    codigo: prog.codigo || '',
+    nivel: prog.nivel || 'Tecnólogo',
+    aliasStr: Array.isArray(prog.alias) ? prog.alias.join(', ') : '',
+    descripcion: prog.descripcion || '',
+    estado: prog.estado || 'Activo'
+  })
+  showModalEditarPrograma.value = true
+}
+
+async function guardarPrograma() {
+  if (!esAdmin.value) {
+    showToastFn('Acción restringida: solo el Administrador puede guardar programas', 'error')
+    return
+  }
+  if (!programaForm.nombre || !programaForm.nombre.trim()) {
+    showToastFn('El nombre del programa es obligatorio', 'error')
+    return
+  }
+
+  loadingPrograma.value = true
+  try {
+    const aliasArr = programaForm.aliasStr
+      ? programaForm.aliasStr.split(',').map(a => a.trim()).filter(Boolean)
+      : []
+
+    const body = {
+      nombre: normalizarNombrePrograma(programaForm.nombre, programasList.value),
+      sigla: programaForm.sigla.trim().toUpperCase(),
+      codigo: programaForm.codigo.trim().toUpperCase(),
+      nivel: programaForm.nivel,
+      alias: aliasArr,
+      descripcion: programaForm.descripcion.trim(),
+      estado: programaForm.estado
+    }
+
+    let guardado
+    if (programaForm.id) {
+      guardado = await api.programas.update(programaForm.id, body)
+      showToastFn(`Programa "${guardado.nombre}" actualizado correctamente`)
+    } else {
+      guardado = await api.programas.create(body)
+      showToastFn(`Programa "${guardado.nombre}" creado exitosamente`)
+    }
+
+    await loadProgramas()
+    if (vieneDeFichaForm.value) {
+      fichaForm.nombrePrograma = guardado.nombre
+    }
+    if (programaForm.id) {
+      await loadFichas()
+    }
+
+    showModalEditarPrograma.value = false
+  } catch (err) {
+    showToastFn('Error: ' + err.message, 'error')
+  } finally {
+    loadingPrograma.value = false
+  }
+}
+
+async function cambiarEstadoPrograma(prog) {
+  if (!esAdmin.value) {
+    showToastFn('Acción restringida: solo el Administrador puede cambiar el estado de programas', 'error')
+    return
+  }
+  try {
+    const nuevoEstado = prog.estado === 'Activo' ? 'Inactivo' : 'Activo'
+    await api.programas.update(prog._id, { estado: nuevoEstado })
+    showToastFn(`Programa "${prog.nombre}" marcado como ${nuevoEstado}`)
+    await loadProgramas()
+  } catch (err) {
+    showToastFn('Error al cambiar estado: ' + err.message, 'error')
+  }
+}
+
+async function eliminarPrograma(prog) {
+  if (!esAdmin.value) {
+    showToastFn('Acción restringida: solo el Administrador puede eliminar programas', 'error')
+    return
+  }
+  const ok = await confirmar({
+    titulo: 'Eliminar programa',
+    mensaje: `¿Estás seguro de eliminar el programa "${prog.nombre}"?`,
+    peligro: true,
+  })
+  if (!ok) return
+  try {
+    await api.programas.delete(prog._id)
+    showToastFn(`Programa "${prog.nombre}" eliminado correctamente`)
+    await loadProgramas()
+  } catch (err) {
+    showToastFn('Error al eliminar: ' + err.message, 'error')
+  }
+}
+
+// Recorta el nombre del programa sin partir palabras: "Análisis y desarrollo..."
+function acortarNombre(texto, max = 22) {
+  const s = String(texto ?? '').trim()
+  if (s.length <= max) return s
+  const corte = s.slice(0, max + 1)
+  const i = corte.lastIndexOf(' ')
+  let base = i > 0 ? corte.slice(0, i) : s.slice(0, max)
+  base = base.replace(/(\s+(de|del|la|el|los|las|y|e|en|para|por|con|a|o))+$/i, '').replace(/[\s,.;:]+$/, '')
+  return base + '...'
+}
+
+function toggleDetalle(id) {
+  expandidos.value[id] = !expandidos.value[id]
+}
+
+function formatDocentesComunes(lista) {
+  if (!lista || !lista.length) return 'Ninguno'
+  return lista.map(i => {
+    if (typeof i === 'object') return `${i.nombres || ''} ${i.apellidos || ''}`.trim() || i.correo
+    const inst = instructoresList.value.find(ins => ins._id === i)
+    return inst ? `${inst.nombres || ''} ${inst.apellidos || ''}`.trim() : String(i)
+  }).filter(Boolean).join(', ')
+}
+
+function estaActiva(ficha) {
+  return ficha.estado !== 'Inactivo'
+}
+
+function abrirInhabilitar(ficha) {
+  inhabilitarTarget.value = ficha
+  inhabilitarMotivo.value = ''
+  showInhabilitarModal.value = true
+}
+
+function cerrarInhabilitar() {
+  showInhabilitarModal.value = false
+  inhabilitarTarget.value = null
+}
+
+async function confirmarInhabilitar() {
+  if (!inhabilitarMotivo.value.trim()) {
+    showToastFn('Debes ingresar un motivo para la inhabilitación', 'error')
+    return
+  }
+  const ok = await cambiarEstado(inhabilitarTarget.value, 'Inactivo', inhabilitarMotivo.value.trim())
+  if (ok) cerrarInhabilitar()
+}
+
+async function cambiarEstado(ficha, nuevoEstado, motivo = '') {
+  const accion = nuevoEstado === 'Activo' ? 'habilitar' : 'inhabilitar'
+  try {
+    const actualizada = await api.fichas.update(ficha._id, { estado: nuevoEstado, motivo })
+    // Si el servidor no guarda el campo "estado", lo detectamos en lugar de mostrar un éxito falso.
+    if ((actualizada?.estado ?? 'Activo') !== nuevoEstado) {
+      showToastFn(`No se pudo ${accion} la ficha: el servidor no guardó el estado`, 'error')
+      return false
+    }
+    await loadFichas()
+    showToastFn(nuevoEstado === 'Activo' ? 'Ficha habilitada correctamente' : 'Ficha inhabilitada correctamente')
+    return true
+  } catch (e) {
+    showToastFn('Error: ' + e.message, 'error')
+    return false
+  }
+}
+
+function getInstructorNombre(id) {
+  if (!id) return 'No asignado'
+  const instId = id._id || id
+  const instructor = instructoresList.value.find(i => i._id === instId)
+  return instructor ? `${instructor.nombres} ${instructor.apellidos}` : (id.nombres ? `${id.nombres} ${id.apellidos}` : 'No asignado')
+}
+
+function jornadaBadge(jornada) {
+  if (jornada === 'Mañana' || jornada === 'Diurna') return 'fichas-badge-primary'
+  if (jornada === 'Tarde' || jornada === 'Mixta') return 'fichas-badge-warning'
+  return 'fichas-badge-success'
+}
+
+const liderYaEsLiderEnOtraFicha = computed(() => {
+  if (!fichaForm.instructorLiderId) return null
+  const lidId = fichaForm.instructorLiderId
+  return fichas.value.find(f => f._id !== editingId.value && (f.instructorLiderId?._id === lidId || f.instructorLiderId === lidId))
+})
+
+const FILAS_POR_PAGINA = 10
+const pagina = ref(1)
+const totalPaginas = computed(() => Math.max(1, Math.ceil(fichas.value.length / FILAS_POR_PAGINA)))
+const paginaActual = computed(() => {
+  const inicio = (pagina.value - 1) * FILAS_POR_PAGINA
+  return fichas.value.slice(inicio, inicio + FILAS_POR_PAGINA)
+})
+
+// Si tras eliminar o filtrar la página queda vacía, ajusta a la última válida.
+watch(totalPaginas, (t) => { if (pagina.value > t) pagina.value = t })
+</script>
+
+<template>
+  <div class="fichas-page-header">
+    <h1>Gestión de Fichas</h1>
+    <p>Asigna Instructores Líderes e Instructores Comunes a las fichas</p>
+  </div>
+
+  <div class="fichas-card">
+    <div class="fichas-card-header">
+      <h3>Listado de Fichas</h3>
+      <div class="fichas-header-actions">
+        <button
+          v-if="esAdmin"
+          class="fichas-button fichas-button-secondary"
+          @click="abrirGestionProgramas"
+          title="Catálogo de Programas de Formación (Solo Administrador)"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          <span>Gestionar Programas</span>
+        </button>
+        <button class="fichas-button fichas-button-primary" @click="openCreate" title="Nueva Ficha">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>Nueva Ficha</span>
+        </button>
+      </div>
+    </div>
+
+    <div v-if="fichas.length === 0" class="fichas-empty-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
+      </svg>
+      <p>No hay fichas registradas. Crea la primera usando el botón "Nueva Ficha".</p>
+    </div>
+
+    <div v-else class="fichas-table-container">
+      <table class="fichas-table">
+        <colgroup>
+          <col class="col-codigo">
+          <col class="col-ficha">
+          <col class="col-docente">
+          <col class="col-acciones">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Código Ficha</th>
+            <th>Ficha</th>
+            <th>Instructor Líder</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="f in paginaActual" :key="f._id">
+            <tr :class="{ 'fichas-row-inactiva': !estaActiva(f) }">
+              <td><strong>{{ f.codigoFicha }}</strong></td>
+              <td><span class="fichas-badge fichas-badge-ficha" :title="nombreProgramaLimpio(f.nombrePrograma)">{{ acortarNombre(nombreProgramaLimpio(f.nombrePrograma)) }}</span></td>
+              <td>
+                <span class="fichas-badge fichas-badge-leader">
+                  {{ getInstructorNombre(f.instructorLiderId) }}
+                </span>
+              </td>
+              <td>
+              <div class="fichas-button-group">
+                <button class="fichas-button fichas-button-outline fichas-button-small" @click="openEdit(f)" title="Editar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
+                <button v-if="estaActiva(f)" class="fichas-button fichas-button-warning fichas-button-small" @click="abrirInhabilitar(f)" title="Inhabilitar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></button>
+                <button v-else class="fichas-button fichas-button-primary fichas-button-small" @click="cambiarEstado(f, 'Activo')" title="Habilitar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></button>
+                <button class="fichas-button fichas-button-outline fichas-button-small fichas-toggle" :class="{ 'fichas-toggle-abierto': expandidos[f._id] }" :aria-expanded="!!expandidos[f._id]" @click="toggleDetalle(f._id)" :title="expandidos[f._id] ? 'Ocultar información' : 'Ver más información'"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+              </div>
+              </td>
+            </tr>
+            <tr v-if="expandidos[f._id]" class="fichas-detalle-fila">
+              <td colspan="4">
+                <div class="fichas-detalle">
+                  <div class="fichas-detalle-item"><span class="fichas-detalle-label">Ambiente</span><span>{{ f.aulaAsignada || '—' }}</span></div>
+                  <div class="fichas-detalle-item"><span class="fichas-detalle-label">Jornada</span><span><span class="fichas-badge" :class="jornadaBadge(f.jornada)">{{ f.jornada }}</span></span></div>
+                  <div class="fichas-detalle-item"><span class="fichas-detalle-label">Estado</span><span><span class="fichas-badge" :class="estaActiva(f) ? 'fichas-badge-success' : 'fichas-badge-inactive'">{{ estaActiva(f) ? 'Activa' : 'Inactiva' }}</span></span></div>
+                  <div class="fichas-detalle-item" v-if="f.instructores && f.instructores.length">
+                    <span class="fichas-detalle-label">Instructores de Apoyo</span>
+                    <span>{{ formatDocentesComunes(f.instructores) }}</span>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="fichas.length > 0" class="fichas-paginacion">
+      <button class="fichas-pag-flecha" :disabled="pagina <= 1" @click="pagina--" title="Anterior" aria-label="Página anterior">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="fichas-pag-info">Página {{ pagina }} de {{ totalPaginas }} · {{ fichas.length }} registros</span>
+      <button class="fichas-pag-flecha" :disabled="pagina >= totalPaginas" @click="pagina++" title="Siguiente" aria-label="Página siguiente">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- MODAL DE CREACIÓN / EDICIÓN DE FICHA -->
+  <div v-if="showModal" class="fichas-modal-overlay" @click.self="closeModal">
+    <div class="fichas-modal fichas-modal-large fichas-modal-ficha">
+      <div class="fichas-modal-titulo">
+        <h2>{{ editingId ? ' Editar Ficha' : ' Nueva Ficha' }}</h2>
+        <button
+        v-if="esAdmin"
+        type="button"
+        class="btn-link-programas"
+        @click="abrirCrearProgramaRapido"
+        title="Adjuntar un nuevo programa oficial al catálogo"
+        >
+        + Adjuntar Programa
+        </button>
+      </div>
+      <div class="fichas-form-grid fichas-form-grid-ficha">
+        <div class="fichas-form-group fichas-col-2">
+          <label>Código de Ficha *</label>
+          <input v-model="fichaForm.codigoFicha" type="text" placeholder="Ej: 2670123" />
+        </div>
+        <div class="fichas-form-group fichas-col-2">
+          <label>Jornada *</label>
+          <select v-model="fichaForm.jornada">
+            <option value="" disabled>Selecciona la jornada...</option>
+            <option value="Mañana">Mañana</option>
+            <option value="Tarde">Tarde</option>
+            <option value="Noche">Noche</option>
+            <option value="Mixta">Mixta</option>
+          </select>
+        </div>
+        <div class="fichas-form-group fichas-col-2">
+          <label>Ambiente Asignado *</label>
+          <input v-model="fichaForm.aulaAsignada" type="text" placeholder="Ej: Ambiente 302 - Bloque A" />
+        </div>
+
+        <div class="fichas-form-group fichas-col-6">
+          <div>
+            <label style="margin: 0;">Nombre del Programa *</label>
+          </div>
+          <select
+            v-model="fichaForm.nombrePrograma"
+            class="fichas-select-programa"
+            required
+          >
+            <option value="" disabled>Selecciona un programa de formación...</option>
+            <option
+              v-for="p in programasActivos"
+              :key="p._id"
+              :value="p.nombre"
+            >
+              {{ p.nombre }} {{ p.sigla ? `(${p.sigla})` : '' }} — {{ p.nivel }}
+            </option>
+            <option
+              v-if="fichaForm.nombrePrograma && !programasActivos.some(p => p.nombre === fichaForm.nombrePrograma)"
+              :value="fichaForm.nombrePrograma"
+            >
+              {{ fichaForm.nombrePrograma }} (Histórico)
+            </option>
+          </select>
+          <span class="fichas-programa-help" v-if="esAdmin">
+            Programas estandarizados del centro. Como Administrador, puedes usar "Gestionar Programas" para adjuntar o modificar carreras.
+          </span>
+          <span class="fichas-programa-help" v-else>
+            Selecciona un programa estandarizado de la lista. Solo el Administrador puede adjuntar o modificar programas.
+          </span>
+        </div>
+        <!-- BUSCADOR DE DOCENTES -->
+        <div class="fichas-form-group fichas-form-group-wide">
+          <label> Filtrar / Buscar Instructor en la Lista</label>
+          <input
+            v-model="busquedaDocente"
+            type="text"
+            placeholder="Escribe el nombre, apellido, documento o especialidad del instructor..."
+            class="fichas-instructor-search"
+          />
+        </div>
+
+        <div class="fichas-form-group fichas-form-group-wide">
+          <label> Instructor Líder de la Ficha (Obligatorio) *</label>
+          <select v-model="fichaForm.instructorLiderId" class="fichas-leader-select">
+            <option :value="null" disabled>Selecciona al Instructor Líder...</option>
+            <option v-for="i in instructoresFiltrados" :key="i._id" :value="i._id">
+               {{ i.nombres }} {{ i.apellidos }} — {{ i.especialidad }}
+            </option>
+          </select>
+          <p v-if="instructoresFiltrados.length === 0" class="fichas-warning-text">
+            No se encontraron instructores con la búsqueda "{{ busquedaDocente }}".
+          </p>
+          <p v-if="liderYaEsLiderEnOtraFicha" class="fichas-warning-text">
+             <strong>Aviso de Liderazgo:</strong> Este instructor ya es Líder de la Ficha <strong>{{ liderYaEsLiderEnOtraFicha.codigoFicha }}</strong> ({{ liderYaEsLiderEnOtraFicha.nombrePrograma }}). Se permite ser líder de múltiples fichas.
+          </p>
+        </div>
+
+        <div class="fichas-form-group fichas-form-group-wide">
+          <label> Instructores Comunes Asignados (Opcional)</label>
+          <p class="fichas-help-text">Selecciona los instructores adicionales que dictan clases en esta ficha:</p>
+          <div class="fichas-instructor-check-grid">
+            <label
+              v-for="i in instructoresFiltrados"
+              :key="i._id"
+              class="fichas-instructor-check-item"
+              :class="{ 'is-disabled': i._id === fichaForm.instructorLiderId }"
+            >
+              <input
+                type="checkbox"
+                :value="i._id"
+                :checked="fichaForm.instructores.includes(i._id)"
+                :disabled="i._id === fichaForm.instructorLiderId"
+                @change="toggleInstructorComun(i._id)"
+              />
+              <span>
+                {{ i.nombres }} {{ i.apellidos }}
+                <small v-if="i._id === fichaForm.instructorLiderId" class="fichas-leader-note"> (Líder principal)</small>
+              </span>
+            </label>
+            <div v-if="instructoresFiltrados.length === 0" class="fichas-no-instructors">
+              No se encontraron instructores que coincidan con la búsqueda.
+            </div>
+          </div>
+        </div>
+
+        <div class="fichas-form-group fichas-col-3">
+          <label>Fecha de Inicio *</label>
+          <input v-model="fichaForm.fechaInicio" type="date" />
+        </div>
+        <div class="fichas-form-group fichas-col-3">
+          <label>Fecha de Fin *</label>
+          <input v-model="fichaForm.fechaFin" type="date" />
+        </div>
+      </div>
+      <div class="fichas-modal-actions">
+        <button class="fichas-button fichas-button-outline" @click="closeModal" title="Cancelar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        <button class="fichas-button fichas-button-primary" @click="guardarFicha" :disabled="loading" title="Guardar">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL DE INHABILITACIÓN DE FICHA -->
+  <div v-if="showInhabilitarModal" class="fichas-modal-overlay" @click.self="cerrarInhabilitar">
+    <div class="fichas-modal fichas-modal-small">
+      <h2>Inhabilitar Ficha</h2>
+      <p class="fichas-modal-text">
+        Estás a punto de inhabilitar la ficha <strong>{{ inhabilitarTarget?.codigoFicha }}</strong>.
+        Esta acción la marcará como inactiva.
+      </p>
+      <div class="fichas-form-group">
+        <label>Motivo de inhabilitación</label>
+        <textarea v-model="inhabilitarMotivo" rows="3" placeholder="Ej: Ficha finalizada, se canceló la formación, etc."></textarea>
+      </div>
+      <div class="fichas-modal-actions">
+        <button class="fichas-button fichas-button-outline" @click="cerrarInhabilitar" title="Cancelar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        <button class="fichas-button fichas-button-danger" @click="confirmarInhabilitar" title="Confirmar Inhabilitación"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CATÁLOGO Y GESTIÓN DE PROGRAMAS DE FORMACIÓN -->
+  <div v-if="showModalProgramas" class="fichas-modal-overlay" @click.self="showModalProgramas = false">
+    <div class="fichas-modal fichas-modal-extra-large">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; flex-wrap: wrap; gap: 12px;">
+        <div>
+          <h2 style="margin: 0; font-size: 20px;">Catálogo de Programas de Formación</h2>
+          <p style="margin: 4px 0 0; color: #64748b; font-size: 13.5px;">
+            Estandariza los nombres oficiales. Al modificar un programa, todas las fichas vinculadas se sincronizan automáticamente.
+          </p>
+        </div>
+        <button class="fichas-button fichas-button-primary fichas-button-small" @click="abrirCrearPrograma">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>Nuevo Programa</span>
+        </button>
+      </div>
+
+      <div class="programas-toolbar">
+        <input
+          v-model="busquedaPrograma"
+          type="text"
+          class="programas-search-input"
+          placeholder="Buscar programa por nombre, sigla o código (ej. ADSO, Cocina, IITIC)..."
+        />
+      </div>
+
+      <div class="programas-table-wrap">
+        <table class="programas-table">
+          <thead>
+            <tr>
+              <th>Programa Oficial</th>
+              <th>Sigla / Código</th>
+              <th>Nivel</th>
+              <th style="text-align: center;">Fichas</th>
+              <th style="text-align: center;">Estado</th>
+              <th style="text-align: right;">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="prog in programasFiltrados" :key="prog._id">
+              <td>
+                <strong>{{ prog.nombre }}</strong>
+                <div v-if="prog.descripcion" style="font-size: 11.5px; color: #64748b; margin-top: 2px;">{{ prog.descripcion }}</div>
+              </td>
+              <td>
+                <span v-if="prog.sigla" class="fichas-badge fichas-badge-ficha">{{ prog.sigla }}</span>
+                <span v-if="prog.codigo" style="font-size: 11.5px; color: #64748b; margin-left: 6px;">{{ prog.codigo }}</span>
+              </td>
+              <td>
+                <span class="fichas-badge" :class="prog.nivel === 'Tecnólogo' ? 'badge-nivel-tecnologo' : prog.nivel === 'Técnico' ? 'badge-nivel-tecnico' : 'badge-nivel-otro'">
+                  {{ prog.nivel }}
+                </span>
+              </td>
+              <td style="text-align: center;">
+                <span style="font-weight: 700; color: #334155;">{{ prog.conteoFichas || 0 }}</span>
+              </td>
+              <td style="text-align: center;">
+                <button
+                  type="button"
+                  class="fichas-badge"
+                  :class="prog.estado === 'Activo' ? 'fichas-badge-success' : 'fichas-badge-inactive'"
+                  style="border: none; cursor: pointer;"
+                  @click="cambiarEstadoPrograma(prog)"
+                  :title="prog.estado === 'Activo' ? 'Clic para desactivar' : 'Clic para activar'"
+                >
+                  {{ prog.estado }}
+                </button>
+              </td>
+              <td style="text-align: right;">
+                <div class="fichas-button-group" style="justify-content: flex-end;">
+                  <button class="fichas-button fichas-button-outline fichas-button-small" @click="abrirEditarPrograma(prog)" title="Editar programa">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                  </button>
+                  <button
+                    v-if="(prog.conteoFichas || 0) === 0"
+                    class="fichas-button fichas-button-danger fichas-button-small"
+                    @click="eliminarPrograma(prog)"
+                    title="Eliminar programa"
+                  >
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  </button>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="programasFiltrados.length === 0">
+              <td colspan="6" style="text-align: center; padding: 24px; color: #64748b;">
+                No se encontraron programas con el criterio de búsqueda.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="fichas-modal-actions" style="margin-top: 20px;">
+        <button class="fichas-button fichas-button-outline" @click="showModalProgramas = false">
+          Cerrar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SUB-MODAL: CREAR / EDITAR PROGRAMA -->
+  <div v-if="showModalEditarPrograma" class="fichas-modal-overlay" style="z-index: 1010;" @click.self="showModalEditarPrograma = false">
+    <div class="fichas-modal fichas-modal-small">
+      <h2>{{ programaForm.id ? 'Editar Programa' : 'Nuevo Programa de Formación' }}</h2>
+      <div class="fichas-form-grid" style="grid-template-columns: 1fr;">
+        <div class="fichas-form-group">
+          <label>Nombre Oficial del Programa *</label>
+          <input
+            v-model="programaForm.nombre"
+            type="text"
+            placeholder="Ej: Análisis y Desarrollo de Software"
+            required
+          />
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="fichas-form-group">
+            <label>Sigla (Acrónimo)</label>
+            <input
+              v-model="programaForm.sigla"
+              type="text"
+              placeholder="Ej: ADSO, IITIC, COC"
+            />
+          </div>
+          <div class="fichas-form-group">
+            <label>Nivel de Formación</label>
+            <select v-model="programaForm.nivel">
+              <option value="Tecnólogo">Tecnólogo</option>
+              <option value="Técnico">Técnico</option>
+              <option value="Especialización Tecnológica">Especialización Tecnológica</option>
+              <option value="Operario">Operario</option>
+              <option value="Auxiliar">Auxiliar</option>
+              <option value="Curso Especial">Curso Especial</option>
+            </select>
+          </div>
+        </div>
+        <div class="fichas-form-group">
+          <label>Variantes / Alias reconocidos (separados por coma)</label>
+          <input
+            v-model="programaForm.aliasStr"
+            type="text"
+            placeholder="Ej: analisis y desarrollo, adso, software"
+          />
+        </div>
+      </div>
+
+      <div class="fichas-modal-actions">
+        <button class="fichas-button fichas-button-outline" @click="showModalEditarPrograma = false" :disabled="loadingPrograma">
+          Cancelar
+        </button>
+        <button class="fichas-button fichas-button-primary" @click="guardarPrograma" :disabled="loadingPrograma">
+          {{ loadingPrograma ? 'Guardando...' : (programaForm.id ? 'Guardar Cambios' : 'Crear Programa') }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="toast.show" class="fichas-toast" :class="'fichas-toast-' + toast.type">{{ toast.message }}</div>
+</template>

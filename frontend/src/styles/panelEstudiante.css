@@ -1,0 +1,275 @@
+.student-portal-page { padding: 0 0 24px; }
+.student-portal-role-pill { display: inline-block; margin-top: 12px; background: rgba(16, 185, 129, 0.1); border: 1px solid #6ee7b7; color: #065f46; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+.student-portal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.student-portal-subtitle { color: #64748b; font-size: 14px; }
+.student-portal-role { background: rgba(59,130,246,0.15); color: #2563eb; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 13px; }
+.student-portal-loading { padding: 24px; text-align: center; color: #64748b; }
+.student-portal-error { display: inline-flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; margin-bottom: 16px; max-width: 600px; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.student-portal-grid { display: grid; grid-template-columns: 320px 1fr; gap: 24px; }
+.student-portal-profile-card, .student-portal-card { background: #ffffff; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.student-portal-profile-card { text-align: center; }
+.student-portal-avatar { width: 72px; height: 72px; background: #2563eb; color: #ffffff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; margin: 0 auto 16px; }
+.student-portal-document { font-size: 13px; color: #64748b; margin-bottom: 20px; }
+.student-portal-info-list { text-align: left; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+.student-portal-info-item { display: flex; flex-direction: column; gap: 2px; border-bottom: 1px dashed #e2e8f0; padding-bottom: 8px; }
+.student-portal-info-item span { color: #64748b; font-size: 12px; }
+.student-portal-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.student-portal-stat { background: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 20px; text-align: center; }
+.student-portal-stat-present { background: #28a745; }
+.student-portal-stat-late { background: #f59e0b; }
+.student-portal-stat-absent { background: #dc3545; }
+.student-portal-stat-indigo { background: #6366f1; }
+.student-portal-stat-blue { background: #0284c7; }
+.student-portal-stat-number { display: block; font-size: 32px; font-weight: 700; color: #1e293b; line-height: 1; }
+.student-portal-stat-label { font-size: 13px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px; display: block; }
+.student-portal-stat-present .student-portal-stat-number,
+.student-portal-stat-late .student-portal-stat-number,
+.student-portal-stat-absent .student-portal-stat-number,
+.student-portal-stat-indigo .student-portal-stat-number,
+.student-portal-stat-blue .student-portal-stat-number { color: #ffffff; }
+.student-portal-stat-present .student-portal-stat-label,
+.student-portal-stat-late .student-portal-stat-label,
+.student-portal-stat-absent .student-portal-stat-label,
+.student-portal-stat-indigo .student-portal-stat-label,
+.student-portal-stat-blue .student-portal-stat-label { color: rgba(255, 255, 255, .92); }
+.student-portal-card { margin-bottom: 24px; }
+.student-portal-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.student-portal-card-header h3 { font-size: 18px; font-weight: 600; }
+.student-portal-table-container { overflow: auto; max-height: 70vh; }
+.student-portal-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.student-portal-table th, .student-portal-table td { text-align: left; padding: 12px 16px; border-bottom: 1px solid #e2e8f0; }
+.student-portal-table th { font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; background: #f8fafc; }
+.student-portal-table tbody tr:hover { background: #f8fafc; }
+.student-portal-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.student-portal-badge-success { background: #d4edda; color: #155724; }
+.student-portal-badge-warning { background: #fff3cd; color: #856404; }
+.student-portal-badge-danger { background: #f8d7da; color: #721c24; }
+.student-portal-empty-cell { text-align: center; padding: 48px 20px !important; color: #64748b; }
+@media (max-width: 860px) {
+  .student-portal-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .student-portal-page { padding: 0 0 16px; }
+  .student-portal-header { align-items: flex-start; gap: 16px; flex-direction: column; }
+  .student-portal-header h2 { font-size: 20px; }
+  .student-portal-profile-card,
+  .student-portal-card { padding: 18px 16px; }
+  .student-portal-stats { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+  .student-portal-stat { padding: 16px 12px; }
+  .student-portal-stat-number { font-size: 26px; }
+  .student-portal-table { min-width: 560px; }
+  .student-portal-table th, .student-portal-table td { padding: 10px 12px; }
+}
+
+/* Tarjetas de resumen del aprendiz (mismo estilo StatCard de Reportes) */
+.student-portal-stats-cards { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+@media (max-width: 640px) {
+  .student-portal-stats-cards { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+}
+
+/* Ícono de historial: imagen tal cual, sin recolorear */
+.student-history-btn {
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  line-height: 0;
+}
+.student-history-icon {
+  display: block;
+  height: 38px;
+  width: auto;
+  border-radius: 8px;
+}
+.student-history-btn:hover { background: transparent; border-color: #cfd8c8; }
+.student-history-btn.is-active,
+.student-history-btn.is-active:hover { background: transparent; border-color: #39A900; box-shadow: 0 0 0 2px rgba(57, 169, 0, .2); }
+
+/* Botón "Solo sin excusa": mismo formato de imagen, con borde rojo al activarse */
+.student-sinexcusa-btn.is-active,
+.student-sinexcusa-btn.is-active:hover { border-color: #dc3545; box-shadow: 0 0 0 2px rgba(220, 53, 69, .2); }
+
+/* Botón "Solo con excusa": mismo formato de imagen, con borde azul al activarse */
+.student-conexcusa-btn.is-active,
+.student-conexcusa-btn.is-active:hover { border-color: #0284c7; box-shadow: 0 0 0 2px rgba(2, 132, 199, .2); }
+
+/* ============================================================
+   Historial de asistencias: diseño tipo "panel azulado"
+   ============================================================ */
+.sp-hist-card {
+  background: linear-gradient(160deg, #f1f4f9 0%, #e3e9f2 100%);
+  border: 1px solid #c9d2e0;
+  border-radius: 16px;
+  box-shadow: 0 6px 20px rgba(15, 31, 61, .08);
+  padding: 22px 22px 26px;
+}
+.sp-hist-card .student-portal-card-header { margin-bottom: 18px; }
+.sp-hist-title { font-size: 24px; font-weight: 700; color: #0f1f3d; letter-spacing: -.01em; }
+.sp-hist-count { padding: 5px 14px; border-radius: 999px; background: #ffffff; border: 1px solid #c9d2e0; color: #475569; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+
+.sp-hist-wrap {
+  background: #ffffff;
+  border: 1px solid #cfd6e2;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(15, 31, 61, .06);
+  overflow: auto;
+}
+
+.sp-hist-table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 820px; font-size: 14.5px; }
+
+.sp-hist-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #e6ebf3;
+  color: #475569;
+  border: none;
+  border-bottom: 1px solid #cfd6e2;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.sp-th-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 15px 18px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sp-th-btn:hover { color: #0f1f3d; background: #dde4ef; }
+.sp-sort { color: #94a3b8; flex-shrink: 0; }
+.sp-sort .up, .sp-sort .down { opacity: .9; }
+.sp-sort.is-asc { color: #0f1f3d; }
+.sp-sort.is-asc .down { opacity: .25; }
+.sp-sort.is-desc { color: #0f1f3d; }
+.sp-sort.is-desc .up { opacity: .25; }
+
+.sp-hist-table tbody td {
+  background: #ffffff;
+  padding: 16px 18px;
+  border: none;
+  border-bottom: 1px solid #e5e9f0;
+  color: #1e293b;
+  vertical-align: middle;
+  transition: background .16s ease, box-shadow .16s ease;
+}
+.sp-hist-table tbody tr:last-child td { border-bottom: none; }
+.sp-hist-table tbody tr:hover { background: transparent; }
+.sp-hist-table tbody tr:hover td {
+  background: #ffffff;
+  box-shadow: 0 8px 14px -8px rgba(15, 31, 61, .28), 0 -1px 0 #cfd6e2 inset, 0 1px 0 #cfd6e2 inset;
+}
+
+.sp-hist-icono-texto { display: inline-flex; align-items: center; gap: 9px; color: #1e293b; }
+.sp-hist-icono-texto svg { color: #475569; flex-shrink: 0; }
+.sp-hist-sinhora { color: #94a3b8; letter-spacing: .02em; }
+
+/* Etiquetas de estado con ícono */
+.sp-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 14px 5px 10px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sp-pill-ok   { background: #d9f2de; border-color: #7bc98a; color: #166534; }
+.sp-pill-warn { background: #fff3c4; border-color: #f2cf5a; color: #854d0e; }
+.sp-pill-bad  { background: #fcd9d9; border-color: #ef8f8f; color: #991b1b; }
+.sp-pill-info { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+
+/* Registrado por */
+.sp-hist-quien { display: flex; align-items: center; gap: 10px; }
+.sp-hist-avatar { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; background: #dbe4f3; color: #1e3a8a; font-size: 12.5px; font-weight: 700; }
+.sp-hist-quien-texto { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sp-hist-quien-nombre { font-size: 14px; font-weight: 600; color: #1e293b; line-height: 1.2; }
+.sp-hist-metodo { align-self: flex-start; padding: 1px 8px; border-radius: 999px; background: #eef2f7; border: 1px solid #d5dce8; color: #64748b; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.sp-hist-motivo { color: #334155; font-size: 14px; }
+.sp-hist-vacio { color: #94a3b8; }
+
+.sp-hist-table .student-portal-empty-cell { padding: 40px 20px; color: #64748b; background: #ffffff; }
+
+@media (max-width: 640px) {
+  .sp-hist-card { padding: 16px 12px 18px; }
+  .sp-hist-title { font-size: 19px; }
+}
+
+/* ============================================================
+   Panel de perfil del aprendiz: versión compacta
+   ============================================================ */
+.student-portal-grid { grid-template-columns: 320px minmax(0, 1fr); gap: 24px; align-items: start; }
+.student-portal-profile-card { padding: 28px 24px; }
+.student-portal-profile-card .student-portal-avatar { width: 84px; height: 84px; font-size: 30px; margin: 0 auto 14px; }
+.student-portal-profile-card h3 { font-size: 21px; font-weight: 700; line-height: 1.25; letter-spacing: -.01em; margin: 0 0 4px; }
+.student-portal-profile-card .student-portal-document { font-size: 14px; margin-bottom: 18px; }
+.student-portal-profile-card .student-portal-info-list { gap: 14px; font-size: 15px; }
+.student-portal-profile-card .student-portal-info-item { gap: 3px; padding-bottom: 10px; }
+.student-portal-profile-card .student-portal-info-item span { font-size: 13px; }
+.student-portal-profile-card .student-portal-info-item strong { font-size: 15px; line-height: 1.35; }
+
+@media (max-width: 860px) {
+  .student-portal-grid { grid-template-columns: 1fr; gap: 16px; }
+  /* En pantallas angostas la información se reparte en dos columnas para ocupar menos alto */
+  .student-portal-profile-card .student-portal-info-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+}
+@media (max-width: 480px) {
+  .student-portal-profile-card .student-portal-info-list { grid-template-columns: 1fr 1fr; }
+  .student-portal-profile-card h3 { font-size: 16px; }
+}
+
+/* Tarjetas que muestran "N días · Nh" en la misma línea */
+.student-stat-doble .stat-num { font-size: 26px; white-space: normal; line-height: 1.1; }
+
+/* Filtro por fecha y paginación del historial */
+.sp-filtro-fecha { margin: 16px 0; display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.sp-filtro-fecha label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: #475569; }
+.sp-filtro-fecha input[type="date"] { padding: 8px 10px; border: 1px solid #d9e2d3; border-radius: 8px; background: #fff; font-size: 14px; color: #1e293b; }
+.sp-filtro-fecha input[type="date"]:focus { outline: none; border-color: #39A900; box-shadow: 0 0 0 2px rgba(57,169,0,.2); }
+.sp-filtro-limpiar { padding: 8px 14px; border: 1px solid #d9e2d3; border-radius: 8px; background: #fff; color: #39A900; font-weight: 600; cursor: pointer; }
+.sp-filtro-limpiar:hover { background: #E8F5E0; border-color: #39A900; }
+.sp-paginacion { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px 0 4px; }
+.sp-pag-flecha { width: 32px; height: 32px; border-radius: 50%; background: #fff; border: 1px solid #d9e2d3; color: #39A900; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.sp-pag-flecha:hover:not(:disabled) { background: #E8F5E0; border-color: #39A900; }
+.sp-pag-flecha:disabled { opacity: .35; cursor: not-allowed; }
+.sp-pag-info { font-size: 13px; font-weight: 500; color: #64748B; }
+
+.sp-filtro-tipo { margin: 16px 0 0; display: flex; gap: 8px; flex-wrap: wrap; }
+.sp-tipo-btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border: 2px solid #d9e2d3; border-radius: 12px; background: #fff; color: #334155; font-size: 14px; font-weight: 700; cursor: pointer; transition: background .18s, border-color .18s, color .18s; }
+.sp-tipo-btn:hover { background: #f8faf6; }
+.sp-tipo-todas.is-active { background: #14500A; border-color: #14500A; color: #fff; }
+.sp-tipo-falla { border-color: var(--rojo, #C4432B); color: var(--rojo, #C4432B); }
+.sp-tipo-falla:hover { background: var(--rojo-suave, #FBEAE6); }
+.sp-tipo-falla.is-active { background: var(--rojo, #C4432B); color: #fff; }
+.sp-tipo-tarde { border-color: var(--ambar, #B9791A); color: var(--ambar, #B9791A); }
+.sp-tipo-tarde:hover { background: var(--ambar-suave, #FBF1E1); }
+.sp-tipo-tarde.is-active { background: var(--ambar, #B9791A); color: #fff; }
+
+/* === PERFIL HORIZONTAL (prueba) — para revertir: restaurar ~/scratch/panelEstudiante.ORIGINAL.css === */
+@media (min-width: 861px) {
+  .student-portal-grid { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .student-portal-profile-card { display: grid; grid-template-columns: auto minmax(220px, 300px) minmax(0, 1fr); column-gap: 20px; align-items: center; text-align: left; padding: 20px 28px; }
+  .student-portal-profile-card .student-portal-avatar { grid-row: 1 / span 2; margin: 0; width: 72px; height: 72px; font-size: 26px; }
+  .student-portal-profile-card h3 { margin: 0; align-self: end; font-size: 19px; }
+  .student-portal-profile-card .student-portal-document { margin: 2px 0 0; align-self: start; }
+  .student-portal-profile-card .student-portal-info-list { grid-column: 3; grid-row: 1 / span 2; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin: 0; }
+  .student-portal-profile-card .student-portal-info-item { border-bottom: none; padding: 4px 16px; border-left: 1px solid #e2e8f0; }
+}
+@media (min-width: 861px) and (max-width: 1300px) {
+  .student-portal-profile-card { grid-template-columns: auto minmax(0, 1fr); }
+  .student-portal-profile-card .student-portal-info-list { grid-column: 1 / -1; grid-row: auto; margin-top: 16px; padding-top: 14px; border-top: 1px solid #e2e8f0; }
+  .student-portal-profile-card .student-portal-info-item:first-child { border-left: none; padding-left: 0; }
+}

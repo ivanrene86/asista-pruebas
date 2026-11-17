@@ -1,0 +1,1035 @@
+<script setup>
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import api from '../services/index.js'
+import { socket } from '../services/index.js'
+import { confirmar } from '../composables/useConfirm.js'
+
+const dispositivos = ref([])
+const fichas = ref([])
+const selecciones = reactive({})
+const loading = ref(false)
+const savingId = ref(null)
+const toast = ref({ show: false, message: '', type: '' })
+
+// Selector de fichas (menú desplegable + buscador) por dispositivo.
+const menuAbierto = reactive({})   // { [deviceId]: boolean }
+const busquedas = reactive({})     // { [deviceId]: string }
+
+// Estado online por deviceId (UUID), alimentado por DEVICE_CONNECTED/DISCONNECTED.
+const onlineMap = reactive({})
+
+const pendientes = computed(() =>
+  dispositivos.value.filter((d) => d.activo === false && !d.aprobadoEn)
+)
+const activos = computed(() =>
+  dispositivos.value.filter((d) => d.activo === true)
+)
+const deshabilitados = computed(() =>
+  dispositivos.value.filter((d) => d.activo === false && !!d.aprobadoEn)
+)
+
+const vistaFiltro = ref('todos')
+const filtroFichaId = ref('')
+
+const activosFiltrados = computed(() => {
+  if (!filtroFichaId.value) return activos.value
+  return activos.value.filter((d) =>
+    (d.fichas || []).some((f) => String(f._id || f) === String(filtroFichaId.value))
+  )
+})
+
+onMounted(async () => {
+  loading.value = true
+  try {
+    await Promise.all([loadDispositivos(), loadFichas()])
+  } finally {
+    loading.value = false
+  }
+
+  document.addEventListener('click', cerrarMenusFuera)
+
+  socket.on('connect', unirseAdmin)
+  if (socket.connected) unirseAdmin()
+  socket.on('DEVICES_STATUS', onDevicesStatus)
+  socket.on('DEVICE_CONNECTED', onDeviceConnected)
+  socket.on('DEVICE_DISCONNECTED', onDeviceDisconnected)
+  socket.on('NUEVO_DISPOSITIVO', onNuevoDispositivo)
+  socket.on('ALERTA_SOFIA_PLUS', onAlertaSofiaPlus)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', cerrarMenusFuera)
+  socket.off('connect', unirseAdmin)
+  socket.off('DEVICES_STATUS', onDevicesStatus)
+  socket.off('DEVICE_CONNECTED', onDeviceConnected)
+  socket.off('DEVICE_DISCONNECTED', onDeviceDisconnected)
+  socket.off('NUEVO_DISPOSITIVO', onNuevoDispositivo)
+  socket.off('ALERTA_SOFIA_PLUS', onAlertaSofiaPlus)
+})
+
+function esAdmin() {
+  try {
+    const raw = sessionStorage.getItem('user_data')
+    return raw ? JSON.parse(raw)?.rol === 'Administrador' : false
+  } catch {
+    return false
+  }
+}
+
+function unirseAdmin() {
+  if (esAdmin()) socket.emit('unirse_admin')
+}
+
+function onDevicesStatus(data) {
+  const ids = Array.isArray(data?.deviceIds) ? data.deviceIds : []
+  for (const id of ids) onlineMap[id] = true
+}
+
+function onDeviceConnected(data) {
+  if (data?.deviceId) onlineMap[data.deviceId] = true
+}
+
+function onDeviceDisconnected(data) {
+  if (data?.deviceId) onlineMap[data.deviceId] = false
+}
+
+function onNuevoDispositivo(data) {
+  loadDispositivos()
+  const nombre = data?.hostname || data?.nombre || data?.deviceId || ''
+  showToast(`Nuevo dispositivo "${nombre}" registrado. Pendiente de aprobación.`)
+}
+
+function onAlertaSofiaPlus(data) {
+  const fecha = data?.fecha || '—'
+  const resultado = data?.resultado || 'sin resultado'
+  const intentos = data?.intentos ?? 0
+  showToast(`No se pudo subir a Sofía Plus un registro de ${resultado} del ${fecha} tras ${intentos} intentos. Revisa el panel de sincronización.`, 'error')
+}
+
+async function loadDispositivos() {
+  const data = await api.dispositivos.listar()
+  dispositivos.value = data
+  for (const d of dispositivos.value) {
+    selecciones[d._id] = (d.fichas || []).map(f => f._id || f)
+  }
+}
+
+async function loadFichas() {
+  fichas.value = await api.fichas.getAll()
+}
+
+function showToast(message, type = 'success') {
+  toast.value = { show: true, message, type }
+  setTimeout(() => { toast.value.show = false }, 3000)
+}
+
+function deviceLabel(d) {
+  return d.nombre || d.hostname || d.deviceId || d._id
+}
+
+function toggleFicha(deviceId, fichaId) {
+  const arr = selecciones[deviceId]
+  if (!Array.isArray(arr)) return
+  const i = arr.indexOf(fichaId)
+  if (i > -1) arr.splice(i, 1)
+  else arr.push(fichaId)
+}
+
+// Quita tildes y pasa a minúsculas para que "analisis" encuentre "Análisis".
+function normalizar(texto) {
+  return String(texto ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+function fichasFiltradas(deviceId) {
+  const q = normalizar(busquedas[deviceId])
+  if (!q) return fichas.value
+  return fichas.value.filter((f) =>
+    normalizar(`${f.codigoFicha} ${f.nombrePrograma}`).includes(q)
+  )
+}
+
+function toggleMenu(deviceId) {
+  menuAbierto[deviceId] = !menuAbierto[deviceId]
+}
+
+function abrirMenu(deviceId) {
+  menuAbierto[deviceId] = true
+}
+
+function limpiarBusqueda(deviceId) {
+  busquedas[deviceId] = ''
+}
+
+// Cierra todos los menús al hacer clic fuera de un selector.
+function cerrarMenusFuera(e) {
+  if (e.target.closest?.('.ficha-selector')) return
+  for (const id of Object.keys(menuAbierto)) menuAbierto[id] = false
+}
+
+function getDispositivoDeFicha(fichaId) {
+  return dispositivos.value.find(d => (d.fichas || []).some(f => String(f._id || f) === String(fichaId))) || null
+}
+
+async function guardar(device) {
+  savingId.value = device._id
+  try {
+    await api.dispositivos.asociarFichas(device._id, selecciones[device._id] || [])
+    showToast('Asociación guardada correctamente')
+    await loadDispositivos()
+  } catch (e) {
+    showToast('Error: ' + (e.message || 'No se pudo guardar'), 'error')
+  } finally {
+    savingId.value = null
+  }
+}
+
+async function resetFingerprint(device) {
+  const ok = await confirmar({
+    titulo: 'Resetear dispositivo',
+    mensaje: `¿Resetear la identidad de hardware de "${deviceLabel(device)}"?\n\nSe eliminará el fingerprint guardado y el dispositivo lo re-adoptará en su próxima conexión. Úsalo solo si reinstalaste Windows o reemplazaste el disco de ese PC.`,
+  })
+  if (!ok) return
+  savingId.value = device._id
+  try {
+    await api.dispositivos.resetFingerprint(device._id)
+    showToast('Identidad de hardware reseteada. Re-adoptará al reconectar.')
+    await loadDispositivos()
+  } catch (e) {
+    showToast('Error: ' + (e.message || 'No se pudo resetear'), 'error')
+  } finally {
+    savingId.value = null
+  }
+}
+
+async function aprobarDispositivo(device) {
+  savingId.value = device._id
+  try {
+    await api.dispositivos.aprobar(device._id)
+    showToast('Dispositivo aprobado')
+    await loadDispositivos()
+  } catch (e) {
+    showToast('Error: ' + (e.message || 'No se pudo aprobar'), 'error')
+  } finally {
+    savingId.value = null
+  }
+}
+
+async function deshabilitarDispositivo(device) {
+  const ok = await confirmar({
+    titulo: 'Deshabilitar dispositivo',
+    mensaje: `¿Deshabilitar "${deviceLabel(device)}"?\n\nEl dispositivo perderá el acceso de inmediato si está conectado.`,
+    peligro: true,
+  })
+  if (!ok) return
+  savingId.value = device._id
+  try {
+    await api.dispositivos.deshabilitar(device._id)
+    showToast('Dispositivo deshabilitado')
+    await loadDispositivos()
+  } catch (e) {
+    showToast('Error: ' + (e.message || 'No se pudo deshabilitar'), 'error')
+  } finally {
+    savingId.value = null
+  }
+}
+
+async function reactivarDispositivo(device) {
+  savingId.value = device._id
+  try {
+    await api.dispositivos.aprobar(device._id)
+    showToast('Dispositivo reactivado')
+    await loadDispositivos()
+  } catch (e) {
+    showToast('Error: ' + (e.message || 'No se pudo reactivar'), 'error')
+  } finally {
+    savingId.value = null
+  }
+}
+
+async function rechazarDispositivo(device) {
+  const ok = await confirmar({
+    titulo: 'Rechazar dispositivo',
+    mensaje: `¿Rechazar y eliminar "${deviceLabel(device)}"?\n\nEsta acción es permanente y borra el dispositivo.`,
+    peligro: true,
+  })
+  if (!ok) return
+  savingId.value = device._id
+  try {
+    await api.dispositivos.eliminar(device._id)
+    showToast('Dispositivo rechazado y eliminado')
+    await loadDispositivos()
+  } catch (e) {
+    showToast('Error: ' + (e.message || 'No se pudo rechazar'), 'error')
+  } finally {
+    savingId.value = null
+  }
+}
+
+async function eliminarDispositivo(device) {
+  const ok = await confirmar({
+    titulo: 'Eliminar dispositivo',
+    mensaje: `¿Eliminar definitivamente "${deviceLabel(device)}"?\n\nEsta acción borrará el registro del dispositivo de la base de datos y liberará cualquier ficha asignada.`,
+    peligro: true,
+  })
+  if (!ok) return
+  savingId.value = device._id
+  try {
+    await api.dispositivos.eliminar(device._id)
+    showToast('Dispositivo eliminado correctamente')
+    await loadDispositivos()
+  } catch (e) {
+    showToast('Error: ' + (e.message || 'No se pudo eliminar'), 'error')
+  } finally {
+    savingId.value = null
+  }
+}
+
+function formatFecha(iso) {
+  if (!iso) return '—'
+  try {
+    return new Date(iso).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+  } catch {
+    return iso
+  }
+}
+
+const editandoNombreId = ref(null)
+const nombreTemp = ref('')
+const guardandoNombre = ref(false)
+
+function iniciarEdicionNombre(d) {
+  editandoNombreId.value = d._id
+  nombreTemp.value = d.nombre || ''
+}
+
+function cancelarEdicionNombre() {
+  editandoNombreId.value = null
+  nombreTemp.value = ''
+}
+
+async function guardarNombre(d) {
+  if (guardandoNombre.value) return
+  guardandoNombre.value = true
+  try {
+    const res = await api.dispositivos.actualizarNombre(d._id, nombreTemp.value)
+    d.nombre = res?.dispositivo?.nombre ?? nombreTemp.value.trim()
+    showToast('Apodo del dispositivo actualizado')
+    cancelarEdicionNombre()
+  } catch (e) {
+    showToast('Error al actualizar apodo: ' + (e.message || 'Error desconocido'), 'error')
+  } finally {
+    guardandoNombre.value = false
+  }
+}
+</script>
+
+<template>
+  <div class="page-header">
+    <h1>Dispositivos</h1>
+    <p>Asocia fichas a cada lector físico. Una ficha solo puede estar asociada a un dispositivo a la vez.</p>
+  </div>
+
+  <div v-if="loading" class="empty-state"><p>Cargando dispositivos…</p></div>
+
+  <div v-else-if="dispositivos.length === 0" class="empty-state">
+    <p>No hay dispositivos registrados todavía. La app de Asista se registra automáticamente al iniciar.</p>
+  </div>
+
+  <div v-else>
+    <div class="filtro-barra">
+      <div class="filtro-chips">
+        <button type="button" class="chip" :class="{ 'chip-activo': vistaFiltro === 'todos' }" @click="vistaFiltro = 'todos'">Todos ({{ dispositivos.length }})</button>
+        <button type="button" class="chip" :class="{ 'chip-activo': vistaFiltro === 'pendientes' }" @click="vistaFiltro = 'pendientes'">No registrados ({{ pendientes.length }})</button>
+      </div>
+      <div class="filtro-ficha">
+        <label for="filtro-ficha">Filtrar por ficha</label>
+        <select id="filtro-ficha" v-model="filtroFichaId" class="filtro-select">
+          <option value="">Todas las fichas</option>
+          <option v-for="f in fichas" :key="f._id" :value="f._id">{{ f.codigoFicha }} — {{ f.nombrePrograma }}</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Pendientes de aprobación -->
+    <div v-if="pendientes.length > 0" class="pendientes-section">
+      <h2 class="pendientes-title"> Pendientes de aprobación</h2>
+      <div v-for="d in pendientes" :key="d._id" class="card card-pendiente">
+        <div class="card-header">
+          <div>
+            <div class="device-title-row">
+              <template v-if="editandoNombreId === d._id">
+                <input
+                  v-model="nombreTemp"
+                  type="text"
+                  class="input-nombre-apodo"
+                  placeholder="Apodo (ej: Portátil Prof. Silvia)"
+                  maxlength="60"
+                  @keyup.enter="guardarNombre(d)"
+                  @keyup.esc="cancelarEdicionNombre"
+                  autofocus
+                />
+                <button class="btn-apodo-action btn-apodo-save" :disabled="guardandoNombre" @click="guardarNombre(d)" title="Guardar apodo">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+                <button class="btn-apodo-action btn-apodo-cancel" :disabled="guardandoNombre" @click="cancelarEdicionNombre" title="Cancelar">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </template>
+              <template v-else>
+                <h3>{{ deviceLabel(d) }}</h3>
+                <button class="btn-edit-apodo" @click="iniciarEdicionNombre(d)" :title="d.nombre ? 'Cambiar apodo' : 'Asignar apodo'">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  <span>{{ d.nombre ? 'Cambiar apodo' : '+ Apodo' }}</span>
+                </button>
+              </template>
+            </div>
+            <span class="device-id">{{ d.deviceId }}</span>
+            <span v-if="d.hostname && d.nombre" class="muted">Equipo: {{ d.hostname }}</span>
+            <span class="muted">Registrado: {{ formatFecha(d.createdAt) }}</span>
+          </div>
+          <div class="card-actions">
+            <button class="btn btn-success btn-sm" :disabled="savingId === d._id" @click="aprobarDispositivo(d)" title="Aprobar">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </button>
+            <button class="btn btn-danger btn-sm" :disabled="savingId === d._id" @click="rechazarDispositivo(d)" title="Rechazar">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p v-else-if="vistaFiltro === 'pendientes'" class="filtro-vacio">Sin dispositivos para este filtro</p>
+
+    <template v-if="vistaFiltro === 'todos'">
+    <div class="dispositivos-list">
+      <div v-for="d in activosFiltrados" :key="d._id" class="card">
+        <div class="card-header">
+          <div>
+            <div class="device-title-row">
+              <template v-if="editandoNombreId === d._id">
+                <input
+                  v-model="nombreTemp"
+                  type="text"
+                  class="input-nombre-apodo"
+                  placeholder="Apodo (ej: Portátil Prof. Silvia)"
+                  maxlength="60"
+                  @keyup.enter="guardarNombre(d)"
+                  @keyup.esc="cancelarEdicionNombre"
+                  autofocus
+                />
+                <button class="btn-apodo-action btn-apodo-save" :disabled="guardandoNombre" @click="guardarNombre(d)" title="Guardar apodo">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+                <button class="btn-apodo-action btn-apodo-cancel" :disabled="guardandoNombre" @click="cancelarEdicionNombre" title="Cancelar">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </template>
+              <template v-else>
+                <h3>{{ deviceLabel(d) }}</h3>
+                <button class="btn-edit-apodo" @click="iniciarEdicionNombre(d)" :title="d.nombre ? 'Cambiar apodo' : 'Asignar apodo'">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  <span>{{ d.nombre ? 'Cambiar apodo' : '+ Apodo' }}</span>
+                </button>
+              </template>
+            </div>
+            <span class="device-id">{{ d.deviceId }}</span>
+            <span v-if="d.hostname && d.nombre" class="muted">Equipo: {{ d.hostname }}</span>
+            <span v-if="d.createdAt" class="muted">Registrado: {{ formatFecha(d.createdAt) }}</span>
+            <span class="badge" :class="d.activo ? 'badge-success' : 'badge-danger'">
+              {{ d.activo ? 'Activo' : 'Inactivo' }}
+            </span>
+            <span class="badge" :class="onlineMap[d.deviceId] ? 'badge-online' : 'badge-offline'">
+              {{ onlineMap[d.deviceId] ? '● En línea' : '○ Desconectado' }}
+            </span>
+          </div>
+          <div class="card-actions">
+            <button class="btn btn-primary btn-sm" :disabled="savingId === d._id" @click="guardar(d)" title="Guardar">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            </button>
+            <button class="btn btn-sm btn-reset" :disabled="savingId === d._id" @click="resetFingerprint(d)" title="Resetear identidad de hardware">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            </button>
+            <button class="btn btn-danger btn-sm" :disabled="savingId === d._id" @click="deshabilitarDispositivo(d)" title="Deshabilitar">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+            </button>
+            <button class="btn btn-danger btn-sm btn-eliminar" :disabled="savingId === d._id" @click="eliminarDispositivo(d)" title="Eliminar definitivamente">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </div>
+        </div>
+
+      <div class="fichas-asociadas">
+        <strong>Fichas asociadas:</strong>
+        <template v-if="(d.fichas || []).length === 0">
+          <span class="muted">Ninguna</span>
+        </template>
+        <span v-for="f in d.fichas" :key="f._id" class="badge badge-ficha">
+          {{ f.codigoFicha }} · {{ f.nombrePrograma }}
+        </span>
+      </div>
+
+      <div class="selector-label">Selecciona las fichas que debe atender este dispositivo:</div>
+      <div class="ficha-selector">
+        <div class="ficha-selector-bar">
+          <button
+            type="button"
+            class="ficha-selector-toggle"
+            :class="{ abierto: menuAbierto[d._id] }"
+            :aria-expanded="!!menuAbierto[d._id]"
+            @click="toggleMenu(d._id)"
+          >
+            <span class="ficha-selector-toggle-text">
+              {{ (selecciones[d._id] || []).length > 0
+                ? `${selecciones[d._id].length} ficha(s) seleccionada(s)`
+                : 'Seleccionar fichas' }}
+            </span>
+            <svg class="ficha-selector-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+
+          <div class="ficha-selector-search">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input
+              type="text"
+              v-model="busquedas[d._id]"
+              placeholder="Buscar ficha o programa…"
+              autocomplete="off"
+              @focus="abrirMenu(d._id)"
+              @input="abrirMenu(d._id)"
+            />
+            <button
+              v-if="busquedas[d._id]"
+              type="button"
+              class="ficha-selector-clear"
+              title="Limpiar búsqueda"
+              aria-label="Limpiar búsqueda"
+              @click="limpiarBusqueda(d._id)"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </div>
+        </div>
+
+        <div v-if="menuAbierto[d._id]" class="ficha-selector-menu">
+          <div v-if="fichasFiltradas(d._id).length === 0" class="ficha-selector-empty">
+            No se encontraron fichas para "{{ busquedas[d._id] }}".
+          </div>
+          <label
+            v-for="f in fichasFiltradas(d._id)"
+            :key="f._id"
+            class="dispositivo-ficha-item"
+          >
+            <input
+              type="checkbox"
+              :checked="selecciones[d._id].includes(f._id)"
+              @change="toggleFicha(d._id, f._id)"
+            />
+            <span>
+              {{ f.codigoFicha }} · {{ f.nombrePrograma }}
+              <small
+                v-if="getDispositivoDeFicha(f._id) && getDispositivoDeFicha(f._id)._id !== d._id"
+                class="move-hint"
+                :class="{ 'move-active': selecciones[d._id].includes(f._id) }"
+              >
+                {{ selecciones[d._id].includes(f._id) ? ' se moverá desde' : 'en' }} {{ deviceLabel(getDispositivoDeFicha(f._id)) }}
+              </small>
+            </span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <p v-if="activos.length > 0 && activosFiltrados.length === 0" class="filtro-vacio">Sin dispositivos para este filtro</p>
+    </div>
+
+    <!-- Deshabilitados (aprobados antes, luego inactivos) -->
+    <div v-if="deshabilitados.length > 0" class="pendientes-section">
+      <h2 class="deshabilitados-title">Deshabilitados</h2>
+      <div v-for="d in deshabilitados" :key="d._id" class="card card-deshabilitado">
+        <div class="card-header">
+          <div>
+            <div class="device-title-row">
+              <template v-if="editandoNombreId === d._id">
+                <input
+                  v-model="nombreTemp"
+                  type="text"
+                  class="input-nombre-apodo"
+                  placeholder="Apodo (ej: Portátil Prof. Silvia)"
+                  maxlength="60"
+                  @keyup.enter="guardarNombre(d)"
+                  @keyup.esc="cancelarEdicionNombre"
+                  autofocus
+                />
+                <button class="btn-apodo-action btn-apodo-save" :disabled="guardandoNombre" @click="guardarNombre(d)" title="Guardar apodo">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+                <button class="btn-apodo-action btn-apodo-cancel" :disabled="guardandoNombre" @click="cancelarEdicionNombre" title="Cancelar">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </template>
+              <template v-else>
+                <h3>{{ deviceLabel(d) }}</h3>
+                <button class="btn-edit-apodo" @click="iniciarEdicionNombre(d)" :title="d.nombre ? 'Cambiar apodo' : 'Asignar apodo'">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  <span>{{ d.nombre ? 'Cambiar apodo' : '+ Apodo' }}</span>
+                </button>
+              </template>
+            </div>
+            <span class="device-id">{{ d.deviceId }}</span>
+            <span v-if="d.hostname && d.nombre" class="muted">Equipo: {{ d.hostname }}</span>
+            <span class="badge badge-danger">Inactivo</span>
+          </div>
+          <div class="card-actions">
+            <button class="btn btn-success btn-sm" :disabled="savingId === d._id" @click="reactivarDispositivo(d)" title="Reactivar">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </button>
+            <button class="btn btn-danger btn-sm btn-eliminar" :disabled="savingId === d._id" @click="eliminarDispositivo(d)" title="Eliminar definitivamente">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+
+  <div v-if="toast.show" class="toast" :class="'toast-' + toast.type">{{ toast.message }}</div>
+</template>
+
+<style scoped>
+.pendientes-section {
+  margin-bottom: 24px;
+}
+
+.pendientes-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #b45309;
+  margin-bottom: 12px;
+}
+
+.deshabilitados-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #64748b;
+  margin-bottom: 12px;
+}
+
+.card-deshabilitado {
+  opacity: 0.7;
+}
+
+.dispositivos-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.btn-reset {
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.device-id {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  margin-right: 8px;
+}
+
+.fichas-asociadas {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--text-secondary);
+}
+
+.selector-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.ficha-selector {
+  position: relative;
+}
+
+.ficha-selector-bar {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.ficha-selector-toggle {
+  flex: 0 1 260px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--blanco, #fff);
+  border: 1px solid var(--borde, #e2e6de);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--tinta, #16210f);
+  cursor: pointer;
+  transition: border-color .18s, box-shadow .18s;
+}
+
+.ficha-selector-toggle:hover {
+  border-color: #cbd3c6;
+}
+
+.ficha-selector-toggle.abierto {
+  border-color: var(--verde, #39a900);
+  box-shadow: 0 0 0 3px rgba(57, 169, 0, .14);
+}
+
+.ficha-selector-toggle-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ficha-selector-chevron {
+  flex: 0 0 auto;
+  transition: transform .18s;
+}
+
+.ficha-selector-toggle.abierto .ficha-selector-chevron {
+  transform: rotate(180deg);
+}
+
+.ficha-selector-search {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--blanco, #fff);
+  border: 1px solid var(--borde, #e2e6de);
+  border-radius: 8px;
+  color: var(--text-secondary, #7c857a);
+  transition: border-color .18s, box-shadow .18s;
+}
+
+.ficha-selector-search:focus-within {
+  border-color: var(--verde, #39a900);
+  box-shadow: 0 0 0 3px rgba(57, 169, 0, .14);
+}
+
+.ficha-selector-search svg {
+  flex: 0 0 auto;
+}
+
+.ficha-selector-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  padding: 10px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--tinta, #16210f);
+}
+
+.ficha-selector-clear {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #7c857a);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px;
+}
+
+.ficha-selector-menu {
+  margin-top: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--blanco, #fff);
+  border: 1px solid var(--borde, #e2e6de);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(22, 33, 15, .10);
+  overscroll-behavior: contain;
+}
+
+.ficha-selector-empty {
+  padding: 14px 10px;
+  font-size: 13px;
+  color: var(--text-secondary, #7c857a);
+  text-align: center;
+}
+
+.dispositivo-ficha-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.dispositivo-ficha-item:hover {
+  background: var(--bg);
+}
+
+.dispositivo-ficha-item input {
+  margin-top: 3px;
+}
+
+.move-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.move-hint.move-active {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.badge-online {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.badge-offline {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+@media (max-width: 640px) {
+  .card-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .card-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .pendientes-title,
+  .deshabilitados-title {
+    font-size: 15px;
+  }
+
+  .ficha-selector-bar {
+    flex-direction: column;
+  }
+
+  .ficha-selector-toggle {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .ficha-selector-menu {
+    max-height: 260px;
+  }
+
+  .fichas-asociadas {
+    font-size: 12px;
+  }
+}
+
+/* Barra de filtros de dispositivos */
+.filtro-barra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.filtro-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid #d9e2d3;
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .18s ease, color .18s ease, border-color .18s ease;
+}
+
+.chip-activo {
+  background: #39A900;
+  border-color: #39A900;
+  color: #ffffff;
+}
+
+.filtro-ficha {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.filtro-select {
+  min-width: 240px;
+  padding: 9px 12px;
+  background: var(--blanco, #fff);
+  border: 1px solid var(--borde, #e2e6de);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--tinta, #16210f);
+  cursor: pointer;
+  outline: none;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.filtro-select:focus {
+  border-color: var(--verde, #39a900);
+  box-shadow: 0 0 0 3px rgba(57, 169, 0, .14);
+}
+
+.filtro-vacio {
+  color: #94a3b8;
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+.device-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.device-title-row h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary, #0f172a);
+}
+
+.input-nombre-apodo {
+  padding: 4px 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border: 1.5px solid #39a900;
+  border-radius: 6px;
+  outline: none;
+  background: #ffffff;
+  color: #0f172a;
+  min-width: 220px;
+  box-shadow: 0 0 0 2px rgba(57, 169, 0, 0.15);
+}
+
+.btn-edit-apodo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px dashed #cbd5e1;
+  color: #64748b;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-edit-apodo:hover {
+  background: #f0fdf4;
+  border-color: #39a900;
+  border-style: solid;
+  color: #166534;
+}
+
+.btn-apodo-action {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-apodo-save {
+  background: #39a900;
+  color: #ffffff;
+}
+
+.btn-apodo-save:hover:not(:disabled) {
+  background: #2f8c00;
+}
+
+.btn-apodo-cancel {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #64748b;
+}
+
+.btn-apodo-cancel:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.btn-apodo-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+</style>

@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+*.log
+.git
+.gitignore
+dll
+data
+public
+.env
+.env.*
+!.env.example
+*.sqlite*

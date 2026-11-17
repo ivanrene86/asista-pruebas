@@ -1,0 +1,67 @@
+{
+  "name": "huellero",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Aplicación local de Asista: sistema de asistencia con huella (DigitalPersona U.are.U 4500, SENA)",
+  "author": "SENA ADSO",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ivanrene86/asista-pruebas.git"
+  },
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder --publish never",
+    "build:win": "electron-vite build && electron-builder --win --publish never"
+  },
+  "dependencies": {
+    "koffi": "^2.9.0",
+    "pngjs": "^7.0.0",
+    "socket.io-client": "^4.8.3",
+    "vue": "^3.4.31"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.1.0",
+    "electron": "^30.5.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "vite": "^5.4.0"
+  },
+  "build": {
+    "appId": "co.sena.huellero",
+    "productName": "Asista",
+    "publish": null,
+    "artifactName": "Asista-Setup-${version}.${ext}",
+    "directories": {
+      "output": "release-app"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "dll",
+        "to": "dll"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "include": "build/installer.nsh",
+      "shortcutName": "Asista"
+    }
+  }
+}

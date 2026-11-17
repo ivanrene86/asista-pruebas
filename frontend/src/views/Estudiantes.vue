@@ -1,0 +1,795 @@
+<script setup>
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import api from '../services/index.js'
+import { nombreProgramaLimpio, truncar, formatearNumeroDocumento, capitalizarTexto, TIPOS_DOCUMENTO, normalizarTipoDocumento, normalizarNumeroDocumento } from '../utils/textos.js'
+import StatCard from '../components/StatCard.vue'
+
+const toast = ref({ show: false, message: '', type: '' })
+const showModal = ref(false)
+const showRetirarModal = ref(false)
+const editingId = ref(null)
+const retirarTarget = ref(null)
+const retirarMotivo = ref('')
+const retirarTipo = ref('Inactivo')
+const filtroEstado = ref('Todos')
+const busquedaAvanzadaAbierta = ref(true)
+const loading = ref(false)
+const expandidos = ref({})
+
+const userStr = sessionStorage.getItem('user_data')
+const usuario = ref(userStr ? JSON.parse(userStr) : null)
+const esInstructor = computed(() => usuario.value?.rol === 'Instructor')
+
+const fichasLider = computed(() => {
+  if (!esInstructor.value) return fichasList.value
+  return fichasList.value.filter(f => f.esLider || String(f.instructorLiderId?._id || f.instructorLiderId) === String(usuario.value?.id))
+})
+
+const puedeCrearEstudiante = computed(() => {
+  if (!esInstructor.value) return true
+  return fichasLider.value.length > 0
+})
+
+const busqueda = reactive({ fichaId: null, jornada: '', documento: '', nombres: '', nombreDocumento: '', estadoAsistencia: '' })
+
+const estudianteForm = reactive({
+  nombres: '', apellidos: '', tipoDocumento: 'CC', numeroDocumento: '',
+  correo: '', telefono: '', fichaId: null,
+})
+
+const estudiantes = ref([])
+const fichasList = ref([])
+
+onMounted(async () => { await Promise.all([loadEstudiantes(), loadFichas()]) })
+
+async function loadEstudiantes() {
+  try {
+    const params = {}
+    if (esInstructor.value && usuario.value?.id) {
+      params.instructorId = usuario.value.id
+    }
+    estudiantes.value = await api.estudiantes.getAll(params)
+  } catch (e) {
+    showToastFn('Error al cargar aprendices', 'error')
+  }
+}
+
+async function loadFichas() {
+  try {
+    if (esInstructor.value && usuario.value?.id) {
+      fichasList.value = await api.fichas.getMisFichas(usuario.value.id)
+    } else {
+      fichasList.value = await api.fichas.getAll()
+    }
+  } catch (e) {}
+}
+
+function getFichaById(fichaId) {
+  if (!fichaId) return null
+  const idTarget = typeof fichaId === 'object' ? String(fichaId._id || '') : String(fichaId).trim()
+  return fichasList.value.find(f =>
+    String(f._id) === idTarget ||
+    String(f.codigoFicha).trim() === idTarget
+  )
+}
+
+function esLiderDeEstudiante(estudiante) {
+  if (!esInstructor.value) return true
+  const ficha = getFichaById(estudiante.fichaId)
+  return !!(ficha && ficha.esLider)
+}
+
+// Instructor: true mientras no use la búsqueda avanzada (ficha o nombre/documento); hasta entonces el listado no muestra información
+const sinSeleccion = computed(() => {
+  if (!esInstructor.value) return false
+  const hayBusqueda = !!(busqueda.nombreDocumento.trim() || busqueda.fichaId)
+  return !hayBusqueda
+})
+
+const estudiantesFiltrados = computed(() => {
+  if (sinSeleccion.value) return []
+  let lista = estudiantes.value
+  if (filtroEstado.value && filtroEstado.value !== 'Todos') lista = lista.filter(e => e.estado === filtroEstado.value)
+  if (busqueda.fichaId) {
+    const targetFicha = getFichaById(busqueda.fichaId)
+    const targetIds = [String(busqueda.fichaId)]
+    if (targetFicha) {
+      targetIds.push(String(targetFicha._id))
+      targetIds.push(String(targetFicha.codigoFicha))
+    }
+    lista = lista.filter(e => {
+      const eFichaId = typeof e.fichaId === 'object' ? String(e.fichaId?._id || '') : String(e.fichaId || '')
+      return targetIds.includes(eFichaId)
+    })
+  }
+  if (busqueda.jornada) {
+    lista = lista.filter(e => {
+      const ficha = getFichaById(e.fichaId)
+      return ficha && ficha.jornada === busqueda.jornada
+    })
+  }
+  if (busqueda.documento) {
+    const doc = busqueda.documento.toLowerCase()
+    lista = lista.filter(e => e.numeroDocumento.toLowerCase().includes(doc))
+  }
+  if (busqueda.nombres) {
+    const nom = busqueda.nombres.toLowerCase()
+    lista = lista.filter(e => {
+      const completo = `${e.nombres} ${e.apellidos}`.toLowerCase()
+      return completo.includes(nom)
+    })
+  }
+  if (busqueda.nombreDocumento.trim()) {
+    const q = busqueda.nombreDocumento.trim().toLowerCase()
+    lista = lista.filter(e => {
+      const completo = `${e.nombres} ${e.apellidos}`.toLowerCase()
+      return completo.includes(q) || String(e.numeroDocumento || '').toLowerCase().includes(q)
+    })
+  }
+  if (busqueda.estadoAsistencia) lista = lista.filter(e => e.estadoAsistencia === busqueda.estadoAsistencia)
+  return lista
+})
+
+const FILAS_POR_PAGINA = 10
+const pagina = ref(1)
+const totalPaginas = computed(() => Math.max(1, Math.ceil(estudiantesFiltrados.value.length / FILAS_POR_PAGINA)))
+const paginaActual = computed(() => {
+  const inicio = (pagina.value - 1) * FILAS_POR_PAGINA
+  return estudiantesFiltrados.value.slice(inicio, inicio + FILAS_POR_PAGINA)
+})
+
+// Al cambiar cualquier filtro o búsqueda, vuelve a la página 1.
+watch(
+  [() => filtroEstado.value, () => busqueda.fichaId, () => busqueda.jornada, () => busqueda.documento, () => busqueda.nombres, () => busqueda.nombreDocumento, () => busqueda.estadoAsistencia],
+  () => { pagina.value = 1 }
+)
+
+// Si tras eliminar o filtrar la página queda vacía, ajusta a la última válida.
+watch(totalPaginas, (t) => { if (pagina.value > t) pagina.value = t })
+
+const criteriosActivos = computed(() => {
+  let count = 0
+  if (busqueda.fichaId) count++
+  if (busqueda.jornada) count++
+  if (busqueda.documento) count++
+  if (busqueda.nombres) count++
+  if (busqueda.nombreDocumento.trim()) count++
+  if (busqueda.estadoAsistencia) count++
+  return count
+})
+
+function limpiarBusqueda() {
+  Object.assign(busqueda, { fichaId: null, jornada: '', documento: '', nombres: '', nombreDocumento: '', estadoAsistencia: '' })
+}
+
+function showToastFn(message, type = 'success') {
+  toast.value = { show: true, message, type }
+  setTimeout(() => { toast.value.show = false }, 3000)
+}
+
+function openCreate() {
+  editingId.value = null
+  let fichaDefault = null
+  if (busqueda.fichaId && fichasLider.value.some(f => String(f._id) === String(busqueda.fichaId))) {
+    fichaDefault = busqueda.fichaId
+  } else if (fichasLider.value.length > 0) {
+    fichaDefault = fichasLider.value[0]._id
+  }
+  Object.assign(estudianteForm, {
+    nombres: '', apellidos: '', tipoDocumento: 'CC', numeroDocumento: '',
+    correo: '', telefono: '', fichaId: fichaDefault,
+  })
+  showModal.value = true
+}
+
+function openEdit(estudiante) {
+  editingId.value = estudiante._id
+  Object.assign(estudianteForm, {
+    nombres: estudiante.nombres, apellidos: estudiante.apellidos,
+    tipoDocumento: estudiante.tipoDocumento, numeroDocumento: estudiante.numeroDocumento,
+    correo: estudiante.correo, telefono: estudiante.telefono, fichaId: estudiante.fichaId,
+  })
+  showModal.value = true
+}
+
+function closeModal() { showModal.value = false }
+
+async function guardarEstudiante() {
+  const { nombres, apellidos, tipoDocumento, numeroDocumento, correo, telefono, fichaId } = estudianteForm
+  if (!nombres || !apellidos || !numeroDocumento || !correo || !telefono || !fichaId) {
+    showToastFn('Completa todos los campos obligatorios', 'error')
+    return
+  }
+  loading.value = true
+  try {
+    const body = {
+      nombres: capitalizarTexto(nombres),
+      apellidos: capitalizarTexto(apellidos),
+      tipoDocumento: normalizarTipoDocumento(tipoDocumento),
+      numeroDocumento: normalizarNumeroDocumento(numeroDocumento),
+      correo: String(correo).trim().toLowerCase(),
+      telefono: String(telefono).trim(),
+      fichaId
+    }
+    if (editingId.value) {
+      await api.estudiantes.update(editingId.value, body)
+      showToastFn('Aprendiz actualizado correctamente')
+    } else {
+      body.estado = 'Activo'
+      body.motivo = ''
+      body.estadoAsistencia = 'Sin registro'
+      await api.estudiantes.create(body)
+      showToastFn('Aprendiz creado correctamente')
+    }
+    await loadEstudiantes()
+    closeModal()
+  } catch (e) {
+    showToastFn('Error: ' + e.message, 'error')
+  } finally {
+    loading.value = false
+  }
+}
+
+function abrirRetirar(estudiante, tipo) {
+  retirarTarget.value = estudiante
+  retirarMotivo.value = ''
+  retirarTipo.value = tipo
+  showRetirarModal.value = true
+}
+
+async function confirmarRetirar() {
+  if (!retirarMotivo.value.trim()) {
+    showToastFn('Debes ingresar un motivo', 'error')
+    return
+  }
+  try {
+    await api.estudiantes.update(retirarTarget.value._id, {
+      estado: retirarTipo.value,
+      motivo: retirarMotivo.value.trim(),
+    })
+    await loadEstudiantes()
+    showRetirarModal.value = false
+    const label = retirarTipo.value === 'Retirado' ? 'retirado' : 'inhabilitado'
+    showToastFn(`Aprendiz ${label} correctamente. El historial se ha conservado.`)
+  } catch (e) {
+    showToastFn('Error: ' + e.message, 'error')
+  }
+}
+
+async function activarEstudiante(estudiante) {
+  try {
+    await api.estudiantes.update(estudiante._id, { estado: 'Activo', motivo: '' })
+    await loadEstudiantes()
+    showToastFn('Aprendiz activado correctamente')
+  } catch (e) {
+    showToastFn('Error: ' + e.message, 'error')
+  }
+}
+
+async function eliminarEstudiante(id) {
+  const est = estudiantes.value.find(e => e._id === id)
+  if (est && est.estado !== 'Activo') {
+    showToastFn('No se puede eliminar un aprendiz con historial. Usa la opcion Retirar en su lugar.', 'error')
+    return
+  }
+  try {
+    await api.estudiantes.delete(id)
+    await loadEstudiantes()
+    showToastFn('Aprendiz eliminado correctamente')
+  } catch (e) {
+    showToastFn('Error: ' + e.message, 'error')
+  }
+}
+
+function nombreCompleto(e) { return `${e.nombres} ${e.apellidos}` }
+
+function getFichaNombre(fichaId) {
+  if (!fichaId) return '—'
+  const ficha = getFichaById(fichaId)
+  return ficha ? `${ficha.codigoFicha} - ${ficha.nombrePrograma}` : 'No asignada'
+}
+
+function getFichaProgramaCompleto(fichaId) {
+  if (!fichaId) return '—'
+  const ficha = getFichaById(fichaId)
+  return ficha ? nombreProgramaLimpio(ficha.nombrePrograma) : 'No asignada'
+}
+
+// Recorta el nombre del programa sin partir palabras: "Análisis y desarrollo..."
+function acortarNombre(texto, max = 22) {
+  const s = String(texto ?? '').trim()
+  if (s.length <= max) return s
+  const corte = s.slice(0, max + 1)
+  const i = corte.lastIndexOf(' ')
+  let base = i > 0 ? corte.slice(0, i) : s.slice(0, max)
+  base = base.replace(/(\s+(de|del|la|el|los|las|y|e|en|para|por|con|a|o))+$/i, '').replace(/[\s,.;:]+$/, '')
+  return base + '...'
+}
+
+function getFichaPrograma(fichaId) {
+  return acortarNombre(getFichaProgramaCompleto(fichaId))
+}
+
+function getFichaCodigo(fichaId) {
+  if (!fichaId) return '—'
+  const ficha = getFichaById(fichaId)
+  return ficha ? ficha.codigoFicha : '—'
+}
+
+function toggleDetalle(id) {
+  expandidos.value[id] = !expandidos.value[id]
+}
+
+function getJornada(fichaId) {
+  if (!fichaId) return '—'
+  const ficha = getFichaById(fichaId)
+  return ficha ? ficha.jornada : '—'
+}
+
+function estadoBadge(estado) {
+  if (estado === 'Activo') return 'badge-success'
+  if (estado === 'Inactivo') return 'badge-warning'
+  return 'badge-danger'
+}
+
+function activosCount() { return estudiantes.value.filter(e => e.estado === 'Activo').length }
+function inactivosCount() { return estudiantes.value.filter(e => e.estado === 'Inactivo').length }
+function retiradosCount() { return estudiantes.value.filter(e => e.estado === 'Retirado').length }
+</script>
+
+<template>
+  <div class="page-header">
+    <h1>Aprendices</h1>
+    <p v-if="esInstructor">
+      Mostrando únicamente los aprendices de <strong>tus fichas asignadas</strong>.
+    </p>
+    <p v-else>
+      Gestiona los aprendices. Al inhabilitar o retirar se conserva la trazabilidad.
+    </p>
+    <div v-if="esInstructor" style="display: inline-block; margin-top: 12px; background: rgba(16, 185, 129, 0.1); border: 1px solid #6ee7b7; color: #065f46; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;">
+      Fichas asignadas: {{ fichasList.length }}
+    </div>
+  </div>
+
+  <div class="stats-row">
+    <StatCard icon="check-circle" label="Activos" :value="activosCount()" variant="verde" />
+    <StatCard icon="minus-circle" label="Inactivos" :value="inactivosCount()" variant="ambar" />
+    <StatCard icon="user-x" label="Retirados" :value="retiradosCount()" variant="rojo" />
+  </div>
+
+  <div class="card card-busqueda">
+    <div class="card-header busqueda-header">
+      <div class="busqueda-header-info">
+        <div class="busqueda-icon-badge">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+        </div>
+        <div>
+          <h3 style="margin: 0; font-size: 16px; font-weight: 700;">Filtros y Búsqueda de Aprendices</h3>
+          <p class="busqueda-subtitulo">Ajusta los criterios para encontrar aprendices rápidamente</p>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button v-if="criteriosActivos > 0" class="btn btn-outline btn-sm btn-limpiar-filtros" @click="limpiarBusqueda" title="Limpiar todos los filtros">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <span>Limpiar filtros ({{ criteriosActivos }})</span>
+        </button>
+        <button class="btn btn-outline btn-sm" @click="busquedaAvanzadaAbierta = !busquedaAvanzadaAbierta" :title="busquedaAvanzadaAbierta ? 'Ocultar filtros' : 'Mostrar filtros'">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :style="busquedaAvanzadaAbierta ? 'transform: rotate(180deg);' : ''" style="transition: transform .2s ease;"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div v-if="busquedaAvanzadaAbierta" class="busqueda-filtros-grid" :class="esInstructor ? 'grid-instructor' : 'grid-admin'">
+      <div class="filtro-campo campo-ficha">
+        <label>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Ficha / Programa
+        </label>
+        <select v-model="busqueda.fichaId" class="filtro-input">
+          <option :value="null" :disabled="esInstructor">{{ esInstructor ? 'Escoja ficha' : 'Todas las fichas' }}</option>
+          <option v-for="f in fichasList" :key="f._id" :value="f._id">{{ f.codigoFicha }} — {{ f.nombrePrograma }} ({{ f.jornada }})</option>
+        </select>
+      </div>
+
+      <template v-if="esInstructor">
+        <div class="filtro-campo campo-buscar">
+          <label>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Buscar Aprendiz
+          </label>
+          <div class="input-con-limpiar">
+            <input
+              v-model="busqueda.nombreDocumento"
+              type="text"
+              class="filtro-input"
+              placeholder="Buscar por nombres, apellidos o documento..."
+            />
+            <button v-if="busqueda.nombreDocumento" type="button" class="btn-clear-field" @click="busqueda.nombreDocumento = ''" title="Borrar texto">&times;</button>
+          </div>
+        </div>
+
+
+      </template>
+
+      <template v-else>
+        <div class="filtro-campo campo-buscar">
+          <label>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Nombres o Apellidos
+          </label>
+          <input v-model="busqueda.nombres" type="text" class="filtro-input" placeholder="Buscar por nombre..." />
+        </div>
+
+        <div class="filtro-campo campo-doc">
+          <label>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><line x1="15" y1="8" x2="17" y2="8"/><line x1="15" y1="12" x2="17" y2="12"/><line x1="7" y1="16" x2="17" y2="16"/></svg>
+            N° Documento
+          </label>
+          <input v-model="busqueda.documento" type="text" class="filtro-input" placeholder="Documento..." />
+        </div>
+
+        <div class="filtro-campo campo-jornada">
+          <label>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Jornada
+          </label>
+          <select v-model="busqueda.jornada" class="filtro-input">
+            <option value="">Todas</option>
+            <option value="Mañana">Mañana</option>
+            <option value="Tarde">Tarde</option>
+            <option value="Noche">Noche</option>
+          </select>
+        </div>
+
+
+
+        <div class="filtro-campo campo-asistencia">
+          <label>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+            Asistencia
+          </label>
+          <select v-model="busqueda.estadoAsistencia" class="filtro-input">
+            <option value="">Todos</option>
+            <option value="Sin registro">Sin registro</option>
+            <option value="Presente">Presente</option>
+            <option value="Ausente">Ausente</option>
+          </select>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <h3>Listado de Aprendices</h3>
+        <span v-if="criteriosActivos > 0" class="badge badge-primary">{{ estudiantesFiltrados.length }} resultado(s)</span>
+        
+      </div>
+      <button v-if="puedeCrearEstudiante" class="btn btn-primary" @click="openCreate" title="Nuevo Aprendiz" style="display: inline-flex; align-items: center; gap: 6px;">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Nuevo Aprendiz</span>
+      </button>
+    </div>
+
+    <div v-if="estudiantesFiltrados.length === 0" class="empty-state">
+      <p v-if="sinSeleccion">Usa la búsqueda avanzada para ver la información de los aprendices.</p>
+      <p v-else>{{ criteriosActivos > 0 ? 'No se encontraron aprendices con los criterios de busqueda.' : 'No hay aprendices registrados. Crea el primero usando el boton "Nuevo Aprendiz".' }}</p>
+    </div>
+
+    <div v-else class="table-container">
+      <table class="est-tabla">
+        <colgroup>
+          <col class="col-nombre">
+          <col class="col-ficha-num">
+          <col class="col-ficha">
+          <col class="col-estado">
+          <col class="col-acciones">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Nombre</th><th>N° Ficha</th><th>Ficha</th><th>Estado</th><th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="e in paginaActual" :key="e._id">
+            <tr :class="{ 'fila-inactivo': e.estado !== 'Activo' }">
+              <td><strong :title="nombreCompleto(e)">{{ truncar(nombreCompleto(e), 28) }}</strong></td>
+              <td><strong>{{ getFichaCodigo(e.fichaId) }}</strong></td>
+              <td><span class="badge badge-ficha est-ficha-nombre" :title="getFichaProgramaCompleto(e.fichaId)">{{ getFichaPrograma(e.fichaId) }}</span></td>
+              <td><span class="badge" :class="estadoBadge(e.estado)">{{ e.estado }}</span></td>
+              <td>
+              <div class="btn-group">
+                <template v-if="esLiderDeEstudiante(e)">
+                  <button class="btn btn-outline btn-sm" @click="openEdit(e)" title="Editar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
+                  <template v-if="e.estado === 'Activo'">
+                    <button class="btn btn-warning btn-sm" @click="abrirRetirar(e, 'Inactivo')" title="Inhabilitar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></button>
+                    <button class="btn btn-danger btn-sm" @click="abrirRetirar(e, 'Retirado')" title="Retirar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/></svg></button>
+                  </template>
+                  <button v-else class="btn btn-success btn-sm" @click="activarEstudiante(e)" title="Activar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+                </template>
+                <span v-else style="font-size: 12px; color: #94a3b8;">Solo líder de ficha</span>
+                <button class="btn btn-outline btn-sm est-toggle" :class="{ 'est-toggle-abierto': expandidos[e._id] }" :aria-expanded="!!expandidos[e._id]" @click="toggleDetalle(e._id)" :title="expandidos[e._id] ? 'Ocultar información' : 'Ver más información'"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+              </div>
+              </td>
+            </tr>
+            <tr v-if="expandidos[e._id]" class="est-detalle-fila">
+              <td colspan="5">
+                <div class="est-detalle">
+                  <div class="est-detalle-item"><span class="est-detalle-label">Documento</span><span :title="`${e.tipoDocumento} ${e.numeroDocumento}`"><span class="doc-tipo">{{ e.tipoDocumento }}</span> {{ formatearNumeroDocumento(e.numeroDocumento) }}</span></div>
+                  <div class="est-detalle-item"><span class="est-detalle-label">Correo</span><span>{{ e.correo || '—' }}</span></div>
+                  <div class="est-detalle-item"><span class="est-detalle-label">Teléfono</span><span>{{ e.telefono || '—' }}</span></div>
+                  <div class="est-detalle-item"><span class="est-detalle-label">Jornada</span><span>{{ getJornada(e.fichaId) }}</span></div>
+                  <div v-if="e.estado !== 'Activo' && e.motivo" class="est-detalle-item est-detalle-motivo"><span class="est-detalle-label">Motivo</span><span>{{ e.motivo }}</span></div>
+                </div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="estudiantesFiltrados.length > 0" class="paginacion">
+      <button class="pag-flecha" :disabled="pagina <= 1" @click="pagina--" title="Anterior" aria-label="Página anterior">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="pag-info">Página {{ pagina }} de {{ totalPaginas }} · {{ estudiantesFiltrados.length }} registros</span>
+      <button class="pag-flecha" :disabled="pagina >= totalPaginas" @click="pagina++" title="Siguiente" aria-label="Página siguiente">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div v-if="showRetirarModal" class="modal-overlay" @click.self="showRetirarModal = false">
+    <div class="modal">
+      <h2>{{ retirarTipo === 'Retirado' ? 'Retirar' : 'Inhabilitar' }} Aprendiz</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 16px;">Vas a {{ retirarTipo === 'Retirado' ? 'retirar' : 'inhabilitar' }} a <strong>{{ retirarTarget ? nombreCompleto(retirarTarget) : '' }}</strong>. Su historial y trazabilidad se conservaran, solo cambiara su estado.</p>
+      <div class="form-group">
+        <label>Motivo</label>
+        <textarea v-model="retirarMotivo" rows="3" placeholder="Ej: Traslado de sede, retiro voluntario, bajo rendimiento, etc." style="width: 100%; padding: 10px 12px; border: 1px solid var(--input-border); border-radius: 6px; font-size: 14px; font-family: var(--sans); resize: vertical;"></textarea>
+      </div>
+      <div class="btn-group" style="margin-top: 24px; justify-content: flex-end;">
+        <button class="btn btn-outline" @click="showRetirarModal = false" title="Cancelar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        <button class="btn btn-danger" @click="confirmarRetirar" title="Confirmar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+    <div class="modal">
+      <h2>{{ editingId ? 'Editar Aprendiz' : 'Nuevo Aprendiz' }}</h2>
+      <div class="form-grid">
+        <div class="form-group"><label>Nombres</label><input v-model="estudianteForm.nombres" type="text" placeholder="Nombres del aprendiz" /></div>
+        <div class="form-group"><label>Apellidos</label><input v-model="estudianteForm.apellidos" type="text" placeholder="Apellidos del aprendiz" /></div>
+        <div class="form-group"><label>Tipo de Documento</label><select v-model="estudianteForm.tipoDocumento"><option v-for="t in TIPOS_DOCUMENTO" :key="t.codigo" :value="t.codigo">{{ t.descripcion }}</option></select></div>
+        <div class="form-group"><label>Numero de Documento</label><input v-model="estudianteForm.numeroDocumento" type="text" placeholder="Numero de documento" /></div>
+        <div class="form-group"><label>Correo Electronico</label><input v-model="estudianteForm.correo" type="email" placeholder="correo@ejemplo.com" /></div>
+        <div class="form-group"><label>Telefono</label><input v-model="estudianteForm.telefono" type="tel" placeholder="+57 300 000 0000" /></div>
+        <div class="form-group">
+          <label>Ficha Asignada</label>
+          <select
+            v-model="estudianteForm.fichaId"
+            :disabled="editingId && esInstructor"
+            :style="(editingId && esInstructor) ? 'background: #f1f5f9; color: #94a3b8; cursor: not-allowed;' : ''"
+          >
+            <option :value="null" disabled>Selecciona una ficha</option>
+            <option v-for="f in (esInstructor ? fichasLider : fichasList)" :key="f._id" :value="f._id">{{ f.codigoFicha }} - {{ f.nombrePrograma }} ({{ f.jornada }})</option>
+          </select>
+          <p v-if="esInstructor && !editingId" style="font-size: 11px; color: #64748b; margin-top: 4px;">
+            Mostrando únicamente las fichas donde eres instructor líder.
+          </p>
+        </div>
+      </div>
+      <div class="btn-group" style="margin-top: 24px; justify-content: flex-end;">
+        <button class="btn btn-outline" @click="closeModal" title="Cancelar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        <button class="btn btn-primary" @click="guardarEstudiante" :disabled="loading" title="Guardar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="toast.show" class="toast" :class="'toast-' + toast.type">{{ toast.message }}</div>
+</template>
+
+<style>
+/* Filtros avanzados con óptimo aprovechamiento del espacio */
+.card-busqueda {
+  padding: 18px 22px;
+  margin-bottom: 20px;
+}
+.busqueda-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.busqueda-header-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.busqueda-icon-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(0, 120, 50, 0.08);
+  color: #007832;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.busqueda-subtitulo {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: #64748b;
+}
+.btn-limpiar-filtros {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+.btn-limpiar-filtros:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+.busqueda-filtros-grid {
+  display: grid;
+  gap: 16px 20px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #f1f5f9;
+  align-items: flex-end;
+  width: 100%;
+}
+.busqueda-filtros-grid.grid-instructor {
+  grid-template-columns: minmax(320px, 1.3fr) minmax(280px, 1fr);
+  width: 100%;
+}
+.busqueda-filtros-grid.grid-admin {
+  grid-template-columns: minmax(260px, 1.8fr) minmax(180px, 1.3fr) minmax(150px, 1fr) minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(130px, 0.8fr);
+}
+.filtro-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.filtro-campo label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+.filtro-campo label svg {
+  color: #007832;
+}
+.filtro-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: #1e293b;
+  background: #ffffff;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 8px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.filtro-input:focus {
+  border-color: #007832;
+  box-shadow: 0 0 0 3px rgba(0, 120, 50, 0.12);
+}
+.input-con-limpiar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.btn-clear-field {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: #94a3b8;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+}
+.btn-clear-field:hover {
+  color: #334155;
+}
+
+@media (max-width: 1100px) {
+  .busqueda-filtros-grid.grid-instructor {
+    grid-template-columns: 1fr 1fr;
+  }
+  .busqueda-filtros-grid.grid-instructor .campo-ficha {
+    grid-column: 1 / -1;
+  }
+  .busqueda-filtros-grid.grid-admin {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .busqueda-filtros-grid.grid-instructor,
+  .busqueda-filtros-grid.grid-admin {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Anchos de columna controlados para evitar espacios vacíos anchos entre columnas.
+   El ancho total de la tabla no cambia (sigue siendo 100% del contenedor),
+   solo se distribuye el espacio interno de forma proporcional al contenido. */
+.est-tabla { table-layout: fixed; }
+.est-tabla .col-nombre { width: 30%; }
+.est-tabla .col-ficha-num { width: 11%; }
+.est-tabla .col-ficha { width: 25%; }
+.est-tabla .col-estado { width: 13%; }
+.est-tabla .col-acciones { width: 21%; }
+
+.est-tabla td:last-child .btn-group { justify-content: flex-start; }
+.est-tabla td, .est-tabla th { overflow: hidden; text-overflow: ellipsis; }
+.est-tabla td:last-child, .est-tabla th:last-child { overflow: visible; }
+.est-ficha-nombre { white-space: nowrap; font-size: 12px; }
+.est-toggle svg { transition: transform .2s ease; }
+.est-toggle-abierto svg { transform: rotate(180deg); }
+.est-detalle-fila td { padding: 0; background: var(--verde-tenue); }
+.est-detalle-fila:hover { background: var(--verde-tenue) !important; }
+.est-detalle { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px 24px; padding: 18px 20px; }
+.est-detalle-item { display: flex; flex-direction: column; gap: 4px; font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+.est-detalle-label { font-size: 12px; font-weight: 600; color: var(--texto-suave); }
+.est-detalle-motivo { grid-column: 1 / -1; }
+
+@media (max-width: 640px) {
+  .est-tabla { min-width: 620px; }
+  .est-tabla th, .est-tabla td { padding: 12px 10px; }
+  .est-detalle { grid-template-columns: 1fr; gap: 12px 16px; padding: 16px; }
+}
+
+/* Paginación en cliente */
+.paginacion {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+.pag-flecha {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid #d9e2d3;
+  color: #39A900;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease;
+}
+.pag-flecha:hover:not(:disabled) {
+  background: #E8F5E0;
+  border-color: #39A900;
+}
+.pag-flecha:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
+.pag-info {
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748B;
+  white-space: nowrap;
+}
+</style>

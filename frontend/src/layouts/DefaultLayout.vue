@@ -1,0 +1,241 @@
+<script setup>
+import { ref, computed, watch } from 'vue'
+import { useQuasar } from 'quasar'
+import { useAuth } from '../composables/useAuth.js'
+import { useSistemaEstado } from '../composables/useSistemaEstado.js'
+import { getCurrentView, navigate, viewsForRole, currentComponentFor } from '../router/index.js'
+import senaLogo from '../assets/sena-logo.png'
+import instructorAvatar from '../assets/instructor-avatar.png'
+import iconoEstudiantesMenu from '../assets/estudiantes-menu-icon.png'
+import iconoInstructoresMenu from '../assets/instructores-menu-icon.png'
+import ModalPrimerLoginInstructor from '../components/ModalPrimerLoginInstructor.vue'
+
+const $q = useQuasar()
+const { usuario, headerTitulo, headerSubtitulo, cerrarSesion } = useAuth()
+const { estadoSistema, textoEstado, colorEstadoClass } = useSistemaEstado()
+
+// Drawer de Quasar: `drawerOpen` controla la visibilidad en móvil (overlay),
+// `drawerMini` controla el modo colapsado/desplegado en escritorio.
+const drawerOpen = ref(false)
+
+// El estado (desplegado / contraído) se recuerda entre sesiones, como en Claude.
+const CLAVE_SIDEBAR = 'sidebar_mini'
+function leerMiniGuardado() {
+  try { return localStorage.getItem(CLAVE_SIDEBAR) === '1' } catch { return false }
+}
+const drawerMini = ref(leerMiniGuardado())
+watch(drawerMini, (v) => {
+  try { localStorage.setItem(CLAVE_SIDEBAR, v ? '1' : '0') } catch { /* sin almacenamiento */ }
+})
+
+const currentView = getCurrentView()
+
+const rolActual = computed(() => usuario.value?.rol || 'Administrador')
+
+// Instructores (incluido el instructor líder) ven un avatar en lugar del logo SENA.
+const esInstructor = computed(() => rolActual.value === 'Instructor')
+const vistasDelRol = computed(() => viewsForRole(rolActual.value, usuario.value?.esLider))
+
+// "Perfil" aparece como primer ítem del menú del Administrador. Para el resto de
+// roles no se lista: se abre al pulsar el logo/avatar.
+const viewsDisponibles = computed(() => {
+  if (rolActual.value === 'Administrador') return vistasDelRol.value
+  const { perfil, ...resto } = vistasDelRol.value
+  return resto
+})
+const tienePerfil = computed(() => !!vistasDelRol.value.perfil)
+
+// El modo mini (solo íconos) existe únicamente en escritorio. En móvil el
+// drawer siempre se muestra completo para no perder los textos del menú.
+const esMovil = computed(() => $q.screen.lt.md)
+const miniEfectivo = computed(() => drawerMini.value && !esMovil.value)
+const currentComponent = computed(() => currentComponentFor(usuario.value?.rol || 'Administrador'))
+
+// Modal obligatorio para cambio de contraseña y clave Sofía Plus en primer ingreso
+const debePrimerLogin = computed(() => {
+  return usuario.value?.rol === 'Instructor' && Boolean(usuario.value?.primerLogin)
+})
+
+
+// Ícono (Material Icons, vía Quasar) asociado a cada vista del menú.
+const iconosPorVista = {
+  panel_instructor: 'groups',
+  panel_estudiante: 'school',
+  perfil: 'person',
+  instructores: 'person_add',
+  estudiantes: 'group_add',
+  fichas: 'badge',
+  dispositivos: 'computer',
+  importar: 'cloud_upload',
+  reportes: 'description',
+  seguimiento: 'warning',
+  diasFestivos: 'event_busy',
+}
+
+// Íconos de imagen propia (en lugar de Material Icons). Se pintan como máscara,
+// así toman el mismo color que el resto de íconos del menú (normal / activo / hover).
+// Por ahora solo el menú del Administrador usa íconos propios: "Estudiantes" e "Instructores".
+const iconosImagenAdmin = {
+  estudiantes: iconoEstudiantesMenu,
+  instructores: iconoInstructoresMenu,
+}
+function iconoImagenDeVista(key) {
+  if (rolActual.value === 'Administrador') return iconosImagenAdmin[key] || null
+  return null
+}
+
+// Título partido en dos para pintar "Panel" en un color y el resto en verde,
+// tal como en el diseño de referencia.
+const tituloPrincipal = computed(() => headerTitulo.value.split(' ')[0])
+const tituloResaltado = computed(() => headerTitulo.value.split(' ').slice(1).join(' '))
+
+function toggleDrawer() {
+  drawerOpen.value = !drawerOpen.value
+}
+
+function toggleMini() {
+  if (esMovil.value) return
+  drawerMini.value = !drawerMini.value
+}
+
+// Clic en el logo SENA: abre el layout de Perfil.
+function abrirPerfil() {
+  if (!tienePerfil.value) return
+  navigate('perfil')
+  if (esMovil.value) {
+    drawerOpen.value = false
+  }
+}
+
+// Clic en una zona vacía del sidebar contraído: lo despliega (igual que en Claude).
+// Ya no se contrae al hacer clic fuera: solo con el botón de contraer/desplegar.
+function onSidebarClick() {
+  if (!esMovil.value && drawerMini.value) {
+    drawerMini.value = false
+  }
+}
+
+function irA(key) {
+  navigate(key)
+  // Solo cerramos el overlay en móvil; en escritorio el menú
+  // permanece tal cual estaba (abierto o mini), sin cerrarse.
+  if (esMovil.value) {
+    drawerOpen.value = false
+  }
+}
+</script>
+
+<template>
+  <q-layout view="hhh Lpr fff" class="app-shell">
+    <q-drawer
+      v-model="drawerOpen"
+      :mini="miniEfectivo"
+      show-if-above
+      :width="272"
+      :mini-width="88"
+      class="app-sidebar"
+    >
+      <div class="sidebar-inner" @click="onSidebarClick">
+        <div class="sidebar-header">
+          <div class="sidebar-header-top">
+            <button
+              v-if="esInstructor"
+              type="button"
+              class="sidebar-logo-btn"
+              :class="{ active: currentView === 'perfil' }"
+              @click.stop="abrirPerfil"
+              :title="tienePerfil ? 'Ir a Perfil' : null"
+            >
+              <img
+                :src="instructorAvatar"
+                alt="Instructor"
+                class="sidebar-avatar-img"
+              />
+            </button>
+            <!-- Admin / Aprendiz: solo el logo SENA, sin botón ni borde -->
+            <div v-else class="sidebar-logo-plain">
+              <img :src="senaLogo" alt="Logo SENA" />
+            </div>
+
+            <!-- Botón para contraer / desplegar el menú (solo escritorio) -->
+            <button
+              v-if="!esMovil"
+              type="button"
+              class="sidebar-toggle-btn"
+              :title="miniEfectivo ? 'Desplegar menú' : 'Contraer menú'"
+              :aria-label="miniEfectivo ? 'Desplegar menú' : 'Contraer menú'"
+              :aria-expanded="!miniEfectivo"
+              @click.stop="toggleMini"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="16" rx="3" />
+                <line x1="9" y1="4" x2="9" y2="20" />
+                <polyline v-if="!miniEfectivo" points="16 9.5 13.5 12 16 14.5" />
+                <polyline v-else points="13.5 9.5 16 12 13.5 14.5" />
+              </svg>
+            </button>
+          </div>
+
+          <template v-if="!miniEfectivo">
+            <h2 class="sidebar-title">{{ tituloPrincipal }} <span>{{ tituloResaltado }}</span></h2>
+            <p class="sidebar-subtitle">{{ headerSubtitulo }}</p>
+          </template>
+        </div>
+
+        <nav class="sidebar-nav">
+          <a
+            v-for="(view, key) in viewsDisponibles"
+            :key="key"
+            class="nav-item"
+            :class="{ active: currentView === key }"
+            :title="miniEfectivo ? view.label : null"
+            @click.stop="irA(key)"
+          >
+            <span class="nav-item-icon">
+              <span
+                v-if="iconoImagenDeVista(key)"
+                class="nav-item-icon-mask"
+                :style="{ '--nav-icon': `url(${iconoImagenDeVista(key)})` }"
+                aria-hidden="true"
+              ></span>
+              <q-icon v-else :name="iconosPorVista[key] || 'circle'" size="20px" />
+            </span>
+            <span v-if="!miniEfectivo" class="nav-item-label">{{ view.label }}</span>
+            <q-icon v-if="!miniEfectivo && currentView === key" name="chevron_right" class="nav-item-arrow" size="18px" />
+          </a>
+
+          <a
+            class="nav-item nav-item-logout"
+            :title="miniEfectivo ? 'Cerrar Sesión' : null"
+            @click.stop="cerrarSesion"
+          >
+            <span class="nav-item-icon">
+              <q-icon name="logout" size="20px" />
+            </span>
+            <span v-if="!miniEfectivo" class="nav-item-label">Cerrar Sesión</span>
+          </a>
+        </nav>
+
+        <div class="sidebar-status" :class="colorEstadoClass(estadoSistema.colorEstado)">
+          <span v-if="!miniEfectivo" class="estado-dot"></span>
+          <span class="estado-icon"><q-icon name="fingerprint" size="18px" /></span>
+          <span v-if="!miniEfectivo" class="status-title">{{ textoEstado }}</span>
+        </div>
+      </div>
+    </q-drawer>
+
+    <q-page-container>
+      <button class="menu-toggle" @click="toggleDrawer">&#9776;</button>
+      <main class="main-content">
+        <component :is="currentComponent" />
+      </main>
+    </q-page-container>
+      <!-- Modal bloqueante obligatorio para instructores en su primer login -->
+    <ModalPrimerLoginInstructor
+      v-if="debePrimerLogin"
+      :usuario="usuario"
+      @cerrar-sesion="cerrarSesion"
+    />
+  </q-layout>
+</template>
+

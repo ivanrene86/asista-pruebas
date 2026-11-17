@@ -1,0 +1,70 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.csv
+*.xlsx
+*.xls
+*.sqlite*
+*.db
+backend/data/*
+!backend/data/.gitkeep
+
+# Huellero (Electron) build artifacts
+huellero/out/
+huellero/release/
+huellero/data/
+
+# DigitalPersona SDK and driver files must be obtained through authorized channels.
+huellero/dll/
+huellero/build/driver/*.msi
+huellero/build/sdk/
+huellero/build/vcredist/
+huellero/release-app/
+docs/sdk-reference/
+docs/EULA SDK.rtf
+frontend/public/scripts/fingerprint.sdk.min.js
+frontend/public/scripts/fingerprint.sdk.min.js.map
+frontend/public/scripts/websdk.client.bundle.min.js
+
+# Config local del dispositivo (contiene deviceId + token)
+huellero/config.json
+
+# Backend public dist folder (generado automaticamente en el build)
+backend/public/
+
+# RPA descargas y evidencias
+rpa/descargas/
+rpa/*.png
+rpa/*.pdf
+rpa/.env
+
+# Python caches
+__pycache__/
+*.pyc
